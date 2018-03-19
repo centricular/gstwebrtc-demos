@@ -117,7 +117,7 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char * convert_name,
 
   if (convert_name == "audioconvert") {
     resample = gst_element_factory_make ("audioresample", NULL);
-	g_assert_nonnull (resample);
+    g_assert_nonnull (resample);
     gst_bin_add_many (GST_BIN (pipe), q, conv, resample, sink, NULL);
     gst_element_sync_state_with_parent (q);
     gst_element_sync_state_with_parent (conv);
@@ -129,7 +129,7 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char * convert_name,
     gst_element_sync_state_with_parent (q);
     gst_element_sync_state_with_parent (conv);
     gst_element_sync_state_with_parent (sink);
-	gst_element_link_many (q, conv, sink, NULL);
+    gst_element_link_many (q, conv, sink, NULL);
   }
 
   qpad = gst_element_get_static_pad (q, "sink");
