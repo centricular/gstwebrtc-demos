@@ -105,6 +105,8 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char * convert_name,
   GstPad *qpad;
   GstElement *q, *conv, *resample = NULL, *sink;
   GstPadLinkReturn ret;
+  
+  g_print ("Trying to handle stream with %s ! %s", convert_name, sink_name);
 
   q = gst_element_factory_make("queue", NULL);
   g_assert(q);
