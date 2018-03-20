@@ -115,7 +115,7 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char * convert_name,
   sink = gst_element_factory_make (sink_name, NULL);
   g_assert_nonnull (sink);
 
-  if (convert_name == "audioconvert") {
+  if (g_strcmp0 (convert_name, "audioconvert") == 0) {
     resample = gst_element_factory_make ("audioresample", NULL);
     g_assert_nonnull (resample);
     gst_bin_add_many (GST_BIN (pipe), q, conv, resample, sink, NULL);
