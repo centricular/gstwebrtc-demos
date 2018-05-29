@@ -10,4 +10,4 @@ RUN sed -i 's/sslctx.load_cert_chain(chain_pem, keyfile=key_pem)/pass/g' \
 RUN sed -i 's/ssl=sslctx,//g' \
     ./simple-server.py
 
-CMD ./simple-server.py
+CMD python -u ./simple-server.py
