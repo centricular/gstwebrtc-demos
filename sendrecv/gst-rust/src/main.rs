@@ -61,23 +61,25 @@ fn setup_call(out: &ws::Sender) -> AppState {
     return AppState::PeerConnecting;
 }
 
+fn foo(promise: &gst::Promise) {
+    let reply = promise.get_reply().unwrap();
+    println!("{:?}", reply);
+}
+
 fn register_with_server(out: &ws::Sender) -> AppState {
     out.send("HELLO 2").unwrap();
     return AppState::ServerRegistering;
 }
-
 fn start_pipeline(_out: &ws::Sender) -> AppState {
     let pipeline = gst::parse_launch(
         "webrtcbin name=sendrecv
         stun-server=stun://stun.l.google.com:19302
         videotestsrc pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay !
         queue !
-        application/x-rtp,media=video,encoding-name=VP8,payload=
-        96 ! sendrecv.
+        application/x-rtp,media=video,encoding-name=VP8,payload=96 ! sendrecv.
         audiotestsrc wave=red-noise ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay !
         queue !
-        application/x-rtp,media=audio,encoding-name=OPUS,payload=
-        97 ! sendrecv.
+        application/x-rtp,media=audio,encoding-name=OPUS,payload=97 ! sendrecv.
         ",
     ).unwrap();
     let webrtc1 = pipeline
@@ -97,11 +99,27 @@ fn start_pipeline(_out: &ws::Sender) -> AppState {
     webrtc1.connect_pad_added(move |_, _src_pad| {
         println!("connnect pad added");
     });
-    let ret = webrtc1.connect("on-negotiation-needed", false, |values| {
-        println!("on-negotiation-needed {:?}", values);
-        None
-    });
-    println!("connect ret ONN {:?}", ret);
+    let webrtc1_clone = webrtc1.clone();
+    webrtc1
+        .connect("on-negotiation-needed", false, move |values| {
+            println!("on-negotiation-needed {:?}", values);
+            let webrtc1 = values[0].get::<gst::Element>().expect("Invalid argument");
+            println!("{:?}", webrtc1);
+            let promise = gst::Promise::new_with_change_func(foo);
+            let options = gst::Structure::new_empty("hi");
+            let desc = webrtc1_clone
+                .emit("create-offer", &[&options.to_value(), &promise.to_value()])
+                .unwrap();
+            println!("{:?}", desc);
+            None
+        })
+        .unwrap();
+    webrtc1
+        .connect("on-ice-candidate", false, |values| {
+            println!("on-ice-candidate {:?}", values);
+            None
+        })
+        .unwrap();
     let ret = pipeline.set_state(gst::State::Playing);
     assert_ne!(ret, gst::StateChangeReturn::Failure);
 
@@ -158,8 +176,6 @@ fn main() {
     }
 
     let main_loop = glib::MainLoop::new(None, false);
-
     connect_to_websocket_server_async();
-
     main_loop.run();
 }
