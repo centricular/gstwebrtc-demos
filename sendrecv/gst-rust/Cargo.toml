@@ -4,7 +4,17 @@ version = "0.1.0"
 authors = ["maxmcd <max.t.mcdonnell@gmail.com>"]
 
 [dependencies]
-gstreamer = {version = "0.11.2", features = ["v1_14"]}
-gstreamer-rtsp-server = "0.11.0"
-glib = "0.5.0"
+gstreamer = { git = "https://github.com/sdroege/gstreamer-rs", features = ["v1_14"] }
+gstreamer-rtsp-server = { git = "https://github.com/sdroege/gstreamer-rs" }
+gstreamer-webrtc = { git = "https://github.com/sdroege/gstreamer-rs" }
+gstreamer-sdp = { git = "https://github.com/sdroege/gstreamer-rs" }
+gstreamer-sdp-sys = { git = "https://github.com/sdroege/gstreamer-sys" }
+# gstreamer = { path = "../../../../sdroege/gstreamer-rs/gstreamer/", features = ["v1_14"] }
+# gstreamer-rtsp-server = { path = "../../../../sdroege/gstreamer-rs/gstreamer-rtsp-server/" }
+# gstreamer-webrtc = { path = "../../../../sdroege/gstreamer-rs/gstreamer-webrtc/" }
+# gstreamer-webrtc-sys = { path = "../../../../sdroege/gstreamer-rs/gstreamer-webrtc/" }
+# gstreamer-sdp = { path = "../../../../sdroege/gstreamer-rs/gstreamer-sdp" }
+
+glib = { git = "https://github.com/gtk-rs/glib" }
+serde_json = "1.0.19"
 ws = "0.7.6"

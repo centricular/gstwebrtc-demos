@@ -1,6 +1,12 @@
 extern crate glib;
 extern crate gstreamer as gst;
+extern crate gstreamer_sdp;
+extern crate gstreamer_sdp_sys;
+extern crate gstreamer_webrtc;
 extern crate ws;
+#[macro_use]
+extern crate serde_json;
+use glib::translate::*;
 use gst::prelude::*;
 use gst::{BinExt, ElementExt};
 // use std::io;
@@ -61,16 +67,82 @@ fn setup_call(out: &ws::Sender) -> AppState {
     return AppState::PeerConnecting;
 }
 
-fn foo(promise: &gst::Promise) {
-    let reply = promise.get_reply().unwrap();
-    println!("{:?}", reply);
-}
-
 fn register_with_server(out: &ws::Sender) -> AppState {
     out.send("HELLO 2").unwrap();
     return AppState::ServerRegistering;
 }
-fn start_pipeline(_out: &ws::Sender) -> AppState {
+
+fn sdp_message_as_text(offer: gstreamer_webrtc::WebRTCSessionDescription) -> Option<String> {
+    unsafe {
+        from_glib_full(gstreamer_sdp_sys::gst_sdp_message_as_text(
+            (*offer.to_glib_none().0).sdp,
+        ))
+    }
+}
+
+fn send_sdp_offer(offer: gstreamer_webrtc::WebRTCSessionDescription, out: ws::Sender) {
+    let message = json!({
+          "sdp": {
+            "type": "offer",
+            "sdp": sdp_message_as_text(offer).unwrap(),
+          }
+        });
+    out.send(message.to_string()).unwrap();
+}
+
+fn on_offer_created(webrtc: gst::Element, promise: &gst::Promise, out: ws::Sender) {
+    let reply = promise.get_reply().unwrap();
+
+    println!("{:?}", reply);
+
+    let offer = reply
+        .get_value("offer")
+        .unwrap()
+        .get::<gstreamer_webrtc::WebRTCSessionDescription>()
+        .expect("Invalid argument");
+    println!("{:?}", offer);
+    let promise = gst::Promise::new();
+    webrtc
+        .emit(
+            "set-local-description",
+            &[&offer.to_value(), &promise.to_value()],
+        )
+        .unwrap();
+    send_sdp_offer(offer, out)
+}
+
+fn on_negotiation_needed(values: &[glib::Value], out: ws::Sender) -> Option<glib::Value> {
+    println!("on-negotiation-needed {:?}", values);
+    let webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
+    let webrtc_clone = webrtc.clone();
+    println!("{:?}", webrtc);
+    let promise = gst::Promise::new_with_change_func(move |promise: &gst::Promise| {
+        on_offer_created(webrtc, promise, out);
+    });
+    let options = gst::Structure::new_empty("options");
+    let desc = webrtc_clone
+        .emit("create-offer", &[&options.to_value(), &promise.to_value()])
+        .unwrap();
+    println!("{:?}", desc);
+    None
+}
+
+fn send_ice_candidate_message(values: &[glib::Value], out: &ws::Sender) -> Option<glib::Value> {
+    let _webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
+    let mlineindex = values[1].get::<u32>().expect("Invalid argument");
+    let candidate = values[2].get::<String>().expect("Invalid argument");
+    let message = json!({
+          "ice": {
+            "candidate": candidate,
+            "sdpMLineIndex": mlineindex,
+          }
+        });
+    println!("{}", message.to_string());
+    out.send(message.to_string()).unwrap();
+    None
+}
+
+fn start_pipeline(out: &ws::Sender) -> AppState {
     let pipeline = gst::parse_launch(
         "webrtcbin name=sendrecv
         stun-server=stun://stun.l.google.com:19302
@@ -82,44 +154,32 @@ fn start_pipeline(_out: &ws::Sender) -> AppState {
         application/x-rtp,media=audio,encoding-name=OPUS,payload=97 ! sendrecv.
         ",
     ).unwrap();
-    let webrtc1 = pipeline
+
+    let webrtc = pipeline
         .clone()
         .dynamic_cast::<gst::Bin>()
         .unwrap()
         .get_by_name("sendrecv")
         .unwrap();
 
-    // let bus = webrtc1.get_bus().unwrap();
-    // bus.add_watch(move |foo, msg| {
-    //     println!("{:?}", foo);
-    //     println!("{:?}", msg);
-    //     glib::Continue(true)
-    // });
-
-    webrtc1.connect_pad_added(move |_, _src_pad| {
+    webrtc.connect_pad_added(move |_, _src_pad| {
         println!("connnect pad added");
     });
-    let webrtc1_clone = webrtc1.clone();
-    webrtc1
+    let out_clone = out.clone();
+    webrtc
         .connect("on-negotiation-needed", false, move |values| {
-            println!("on-negotiation-needed {:?}", values);
-            let webrtc1 = values[0].get::<gst::Element>().expect("Invalid argument");
-            println!("{:?}", webrtc1);
-            let promise = gst::Promise::new_with_change_func(foo);
-            let options = gst::Structure::new_empty("hi");
-            let desc = webrtc1_clone
-                .emit("create-offer", &[&options.to_value(), &promise.to_value()])
-                .unwrap();
-            println!("{:?}", desc);
-            None
+            let out = out_clone.clone();
+            on_negotiation_needed(values, out)
         })
         .unwrap();
-    webrtc1
-        .connect("on-ice-candidate", false, |values| {
-            println!("on-ice-candidate {:?}", values);
-            None
+
+    let out_clone = out.clone();
+    webrtc
+        .connect("on-ice-candidate", false, move |values| {
+            send_ice_candidate_message(values, &out_clone)
         })
         .unwrap();
+
     let ret = pipeline.set_state(gst::State::Playing);
     assert_ne!(ret, gst::StateChangeReturn::Failure);
 
