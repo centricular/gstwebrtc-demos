@@ -13,3 +13,4 @@ gstreamer-sdp-sys = { git = "https://github.com/sdroege/gstreamer-sys" }
 glib = { git = "https://github.com/gtk-rs/glib" }
 serde_json = "1.0.19"
 ws = "0.7.6"
+rand = "0.5"
