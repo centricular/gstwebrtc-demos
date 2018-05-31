@@ -3,6 +3,7 @@ extern crate gstreamer as gst;
 extern crate gstreamer_sdp;
 extern crate gstreamer_sdp_sys;
 extern crate gstreamer_webrtc;
+extern crate rand;
 extern crate ws;
 #[macro_use]
 extern crate serde_json;
@@ -10,6 +11,7 @@ extern crate serde_json;
 use glib::translate::*;
 use gst::prelude::*;
 use gst::{BinExt, ElementExt};
+use rand::Rng;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -61,13 +63,16 @@ fn check_plugins() -> bool {
 
 fn setup_call(app_state: &Arc<AtomicUsize>, out: &ws::Sender) -> AppState {
     app_state.store(AppState::PeerConnecting as usize, Ordering::Relaxed);
+    println!("Setting up signalling server call with 1");
     out.send("SESSION 1").unwrap();
     return AppState::PeerConnecting;
 }
 
 fn register_with_server(app_state: &Arc<AtomicUsize>, out: &ws::Sender) -> AppState {
     app_state.store(AppState::ServerRegistering as usize, Ordering::Relaxed);
-    out.send("HELLO 2").unwrap();
+    let our_id = rand::thread_rng().gen_range(10, 10_000);
+    println!("Registering id {} with server", our_id);
+    out.send(format!("HELLO {}", our_id)).unwrap();
     return AppState::ServerRegistering;
 }
 
@@ -109,14 +114,11 @@ fn on_offer_created(
     );
     let reply = promise.get_reply().unwrap();
 
-    println!("{:?}", reply);
-
     let offer = reply
         .get_value("offer")
         .unwrap()
         .get::<gstreamer_webrtc::WebRTCSessionDescription>()
         .expect("Invalid argument");
-    println!("{:?}", offer);
     let promise = gst::Promise::new();
     webrtc
         .emit(
@@ -132,22 +134,19 @@ fn on_negotiation_needed(
     values: &[glib::Value],
     out: &ws::Sender,
 ) -> Option<glib::Value> {
-    println!("on-negotiation-needed {:?}", values);
     app_state.store(AppState::PeerCallNegotiating as usize, Ordering::Relaxed);
 
     let webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
     let webrtc_clone = webrtc.clone();
     let out_clone = out.clone();
     let app_state_clone = app_state.clone();
-    println!("{:?}", webrtc);
     let promise = gst::Promise::new_with_change_func(move |promise: &gst::Promise| {
         on_offer_created(&app_state_clone, webrtc, promise, &out_clone);
     });
     let options = gst::Structure::new_empty("options");
-    let desc = webrtc_clone
+    webrtc_clone
         .emit("create-offer", &[&options.to_value(), &promise.to_value()])
         .unwrap();
-    println!("{:?}", desc);
     None
 }
 
@@ -199,7 +198,6 @@ fn on_incoming_decodebin_stream(
 
     let caps = pad.get_current_caps().unwrap();
     let name = caps.get_structure(0).unwrap().get_name();
-    println!("CAPS NAME {:?}", name);
     if name.starts_with("video") {
         handle_media_stream(&pad, &pipe, "videoconvert", "autovideosink");
     } else if name.starts_with("audio") {
@@ -210,17 +208,16 @@ fn on_incoming_decodebin_stream(
     None
 }
 
-fn on_incoming_stream(values: &[glib::Value], pipeline: &gst::Element) -> Option<glib::Value> {
+fn on_incoming_stream(values: &[glib::Value], pipe: &gst::Element) -> Option<glib::Value> {
     let webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
     let decodebin = gst::ElementFactory::make("decodebin", None).unwrap();
-    let pipeline_clone = pipeline.clone();
+    let pipe_clone = pipe.clone();
     decodebin
         .connect("pad-added", false, move |values| {
-            on_incoming_decodebin_stream(values, &pipeline_clone)
+            on_incoming_decodebin_stream(values, &pipe_clone)
         })
         .unwrap();
-    pipeline
-        .clone()
+    pipe.clone()
         .dynamic_cast::<gst::Bin>()
         .unwrap()
         .add(&decodebin)
@@ -248,13 +245,12 @@ fn send_ice_candidate_message(
             "sdpMLineIndex": mlineindex,
           }
         });
-    println!("{}", message.to_string());
     out.send(message.to_string()).unwrap();
     None
 }
 
 fn start_pipeline(app_state: &Arc<AtomicUsize>, out: &ws::Sender) -> gst::Element {
-    let pipeline = gst::parse_launch(
+    let pipe = gst::parse_launch(
         "webrtcbin name=sendrecv
         stun-server=stun://stun.l.google.com:19302
         videotestsrc pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay !
@@ -266,16 +262,12 @@ fn start_pipeline(app_state: &Arc<AtomicUsize>, out: &ws::Sender) -> gst::Elemen
         ",
     ).unwrap();
 
-    let webrtc = pipeline
-        .clone()
+    let webrtc = pipe.clone()
         .dynamic_cast::<gst::Bin>()
         .unwrap()
         .get_by_name("sendrecv")
         .unwrap();
 
-    webrtc.connect_pad_added(move |_, _src_pad| {
-        println!("connnect pad added");
-    });
     let out_clone = out.clone();
     let app_state_clone = app_state.clone();
     webrtc
@@ -292,14 +284,15 @@ fn start_pipeline(app_state: &Arc<AtomicUsize>, out: &ws::Sender) -> gst::Elemen
         })
         .unwrap();
 
-    let pipeline_clone = pipeline.clone();
+    let pipe_clone = pipe.clone();
+    // TODO: replace with webrtc.connect_pad_added
     webrtc
         .connect("pad-added", false, move |values| {
-            on_incoming_stream(values, &pipeline_clone)
+            on_incoming_stream(values, &pipe_clone)
         })
         .unwrap();
-    // TODO pad-added
-    let ret = pipeline.set_state(gst::State::Playing);
+
+    let ret = pipe.set_state(gst::State::Playing);
     assert_ne!(ret, gst::StateChangeReturn::Failure);
 
     return webrtc;
@@ -327,33 +320,26 @@ impl ws::Handler for WsClient {
 
     fn on_message(&mut self, msg: ws::Message) -> ws::Result<()> {
         // Close the connection when we get a response from the server
-        println!("Got message: {}", msg);
         let msg_text = msg.into_text().unwrap();
-        let matched = match msg_text.as_ref() {
-            "HELLO" => {
-                if self.app_state.load(Ordering::Relaxed) != (AppState::ServerRegistering as usize)
-                {
-                    // TODO: signal and cleanup
-                    panic!("ERROR: Received HELLO when not registering");
-                }
-                self.update_state(AppState::ServerRegistered);
-                setup_call(&self.app_state, &self.out);
-                true
+        if msg_text == "HELLO" {
+            if self.app_state.load(Ordering::Relaxed) != (AppState::ServerRegistering as usize) {
+                // TODO: signal and cleanup
+                panic!("ERROR: Received HELLO when not registering");
             }
-            "SESSION_OK" => {
-                if self.app_state.load(Ordering::Relaxed) != (AppState::PeerConnecting as usize) {
-                    // TODO: signal and cleanup
-                    panic!("ERROR: Received SESSION_OK when not calling");
-                }
-                self.update_state(AppState::PeerConnected);
-                self.webrtc = Some(start_pipeline(&self.app_state, &self.out));
-                true
-            }
-            _ => false,
-        };
-        if matched {
+            self.update_state(AppState::ServerRegistered);
+            setup_call(&self.app_state, &self.out);
             return Ok(());
         }
+        if msg_text == "SESSION_OK" {
+            if self.app_state.load(Ordering::Relaxed) != (AppState::PeerConnecting as usize) {
+                // TODO: signal and cleanup
+                panic!("ERROR: Received SESSION_OK when not calling");
+            }
+            self.update_state(AppState::PeerConnected);
+            self.webrtc = Some(start_pipeline(&self.app_state, &self.out));
+            return Ok(());
+        }
+
         if msg_text.starts_with("ERROR") {
             println!("Got error message! {}", msg_text);
             let error = match self.app_state.load(Ordering::Relaxed) {
@@ -402,7 +388,6 @@ impl ws::Handler for WsClient {
             self.update_state(AppState::PeerCallStarted);
         }
         if json_msg.get("ice").is_some() {
-            println!("ice {:?}", json_msg);
             let candidate = json_msg["ice"]["candidate"].as_str().unwrap();
             let sdpmlineindex = json_msg["ice"]["sdpMLineIndex"].as_u64().unwrap() as u32;
             self.webrtc
