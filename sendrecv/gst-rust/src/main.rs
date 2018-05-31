@@ -10,14 +10,12 @@ extern crate serde_json;
 use glib::translate::*;
 use gst::prelude::*;
 use gst::{BinExt, ElementExt};
-use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-// use std::io;
 
 #[derive(PartialEq, Eq, Debug)]
 enum AppState {
-    AppStateUnknown = 0,
+    // AppStateUnknown = 0,
     AppStateErr = 1,
     ServerConnecting = 1000,
     ServerConnectionError,
@@ -35,12 +33,6 @@ enum AppState {
     PeerCallStopped,
     PeerCallError,
     None,
-}
-
-struct WsClient {
-    out: ws::Sender,
-    webrtc: Option<gst::Element>,
-    app_state: Arc<AtomicUsize>,
 }
 
 fn check_plugins() -> bool {
@@ -159,6 +151,85 @@ fn on_negotiation_needed(
     None
 }
 
+fn handle_media_stream(pad: &gst::Pad, pipe: &gst::Element, convert_name: &str, sink_name: &str) {
+    println!(
+        "Trying to handle stream with {} ! {}",
+        convert_name, sink_name,
+    );
+    let q = gst::ElementFactory::make("queue", None).unwrap();
+    let conv = gst::ElementFactory::make(convert_name, None).unwrap();
+    let sink = gst::ElementFactory::make(sink_name, None).unwrap();
+
+    if convert_name == "audioconvert" {
+        let resample = gst::ElementFactory::make("audioresample", None).unwrap();
+        pipe.clone()
+            .dynamic_cast::<gst::Bin>()
+            .unwrap()
+            .add_many(&[&q, &conv, &resample, &sink])
+            .unwrap();
+        q.sync_state_with_parent().unwrap();
+        conv.sync_state_with_parent().unwrap();
+        resample.sync_state_with_parent().unwrap();
+        sink.sync_state_with_parent().unwrap();
+        gst::Element::link_many(&[&q, &conv, &resample, &sink]).unwrap();
+    } else {
+        pipe.clone()
+            .dynamic_cast::<gst::Bin>()
+            .unwrap()
+            .add_many(&[&q, &conv, &sink])
+            .unwrap();
+        q.sync_state_with_parent().unwrap();
+        conv.sync_state_with_parent().unwrap();
+        sink.sync_state_with_parent().unwrap();
+        gst::Element::link_many(&[&q, &conv, &sink]).unwrap();
+    }
+    let qpad = q.get_static_pad("sink").unwrap();
+    let ret = pad.link(&qpad);
+    assert_eq!(ret, gst::PadLinkReturn::Ok);
+}
+
+fn on_incoming_decodebin_stream(
+    values: &[glib::Value],
+    pipe: &gst::Element,
+) -> Option<glib::Value> {
+    let pad = values[1].get::<gst::Pad>().expect("Invalid argument");
+    if !pad.has_current_caps() {
+        println!("Pad {:?} has no caps, can't do anything, ignoring", pad);
+    }
+
+    let caps = pad.get_current_caps().unwrap();
+    let name = caps.get_structure(0).unwrap().get_name();
+    println!("CAPS NAME {:?}", name);
+    if name.starts_with("video") {
+        handle_media_stream(&pad, &pipe, "videoconvert", "autovideosink");
+    } else if name.starts_with("audio") {
+        handle_media_stream(&pad, &pipe, "audioconvert", "autoaudiosink");
+    } else {
+        println!("Unknown pad {:?}, ignoring", pad);
+    }
+    None
+}
+
+fn on_incoming_stream(values: &[glib::Value], pipeline: &gst::Element) -> Option<glib::Value> {
+    let webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
+    let decodebin = gst::ElementFactory::make("decodebin", None).unwrap();
+    let pipeline_clone = pipeline.clone();
+    decodebin
+        .connect("pad-added", false, move |values| {
+            on_incoming_decodebin_stream(values, &pipeline_clone)
+        })
+        .unwrap();
+    pipeline
+        .clone()
+        .dynamic_cast::<gst::Bin>()
+        .unwrap()
+        .add(&decodebin)
+        .unwrap();
+    decodebin.sync_state_with_parent().unwrap();
+    webrtc.link(&decodebin).unwrap();
+    None
+}
+
 fn send_ice_candidate_message(
     app_state: &Arc<AtomicUsize>,
     values: &[glib::Value],
@@ -221,11 +292,23 @@ fn start_pipeline(app_state: &Arc<AtomicUsize>, out: &ws::Sender) -> gst::Elemen
         })
         .unwrap();
 
+    let pipeline_clone = pipeline.clone();
+    webrtc
+        .connect("pad-added", false, move |values| {
+            on_incoming_stream(values, &pipeline_clone)
+        })
+        .unwrap();
     // TODO pad-added
     let ret = pipeline.set_state(gst::State::Playing);
     assert_ne!(ret, gst::StateChangeReturn::Failure);
 
     return webrtc;
+}
+
+struct WsClient {
+    out: ws::Sender,
+    webrtc: Option<gst::Element>,
+    app_state: Arc<AtomicUsize>,
 }
 
 impl WsClient {
@@ -338,17 +421,11 @@ impl ws::Handler for WsClient {
 }
 
 fn connect_to_websocket_server_async() {
-    let result = ws::connect("ws://signalling:8443", |out| WsClient {
+    ws::connect("ws://signalling:8443", |out| WsClient {
         out: out,
         app_state: Arc::new(AtomicUsize::new(AppState::ServerConnecting as usize)),
         webrtc: None,
-    });
-    match result {
-        Ok(_) => {
-            println!("Connected to");
-        }
-        Err(error) => panic!("There was a problem opening the file: {:?}", error),
-    };
+    }).unwrap();
 }
 
 fn main() {
