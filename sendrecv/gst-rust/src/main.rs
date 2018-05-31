@@ -183,6 +183,7 @@ fn start_pipeline(out: &ws::Sender) -> gst::Element {
         })
         .unwrap();
 
+    // TODO pad-added
     let ret = pipeline.set_state(gst::State::Playing);
     assert_ne!(ret, gst::StateChangeReturn::Failure);
 
@@ -248,9 +249,6 @@ impl ws::Handler for WsClient {
             print!("Received answer:\n{}\n", text.as_str().unwrap());
 
             let ret = gst_sdp_message_parse_buffer(text.as_str().unwrap().as_bytes());
-            println!("{:?}", ret.as_text());
-
-            println!("DONE");
             let answer = gstreamer_webrtc::WebRTCSessionDescription::new(
                 gstreamer_webrtc::WebRTCSDPType::Answer,
                 ret,
@@ -267,6 +265,16 @@ impl ws::Handler for WsClient {
         }
         if json_msg.get("ice").is_some() {
             println!("ice {:?}", json_msg);
+            let candidate = json_msg["ice"]["candidate"].as_str().unwrap();
+            let sdpmlineindex = json_msg["ice"]["sdpMLineIndex"].as_u64().unwrap() as u32;
+            self.webrtc
+                .as_ref()
+                .unwrap()
+                .emit(
+                    "add-ice-candidate",
+                    &[&sdpmlineindex.to_value(), &candidate.to_value()],
+                )
+                .unwrap();
         }
 
         Ok(())
