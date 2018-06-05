@@ -1,3 +1,4 @@
+extern crate clap;
 extern crate glib;
 extern crate gstreamer as gst;
 extern crate gstreamer_sdp;
@@ -86,20 +87,26 @@ fn check_plugins() -> bool {
 }
 
 fn setup_call(app_control: &Arc<Mutex<AppControl>>) -> AppState {
-    app_control.lock().unwrap().app_state = AppState::PeerConnecting;
-    println!("Setting up signalling server call with 1");
-    app_control.lock().unwrap().out.send("SESSION 1").unwrap();
+    let mut app_control = app_control.lock().unwrap();
+    app_control.app_state = AppState::PeerConnecting;
+    println!(
+        "Setting up signalling server call with {}",
+        app_control.peer_id
+    );
+    app_control
+        .ws_sender
+        .send(format!("SESSION {}", app_control.peer_id))
+        .unwrap();
     return AppState::PeerConnecting;
 }
 
 fn register_with_server(app_control: &Arc<Mutex<AppControl>>) -> AppState {
-    app_control.lock().unwrap().app_state = AppState::ServerRegistering;
+    let mut app_control = app_control.lock().unwrap();
+    app_control.app_state = AppState::ServerRegistering;
     let our_id = rand::thread_rng().gen_range(10, 10_000);
     println!("Registering id {} with server", our_id);
     app_control
-        .lock()
-        .unwrap()
-        .out
+        .ws_sender
         .send(format!("HELLO {}", our_id))
         .unwrap();
     return AppState::ServerRegistering;
@@ -117,7 +124,8 @@ fn send_sdp_offer(
     app_control: &Arc<Mutex<AppControl>>,
     offer: gstreamer_webrtc::WebRTCSessionDescription,
 ) {
-    if app_control.lock().unwrap().app_state < AppState::PeerCallNegotiating {
+    let app_control = app_control.lock().unwrap();
+    if app_control.app_state < AppState::PeerCallNegotiating {
         // TODO signal and cleanup
         panic!("Can't send offer, not in call");
     };
@@ -127,12 +135,7 @@ fn send_sdp_offer(
             "sdp": sdp_message_as_text(offer).unwrap(),
           }
         });
-    app_control
-        .lock()
-        .unwrap()
-        .out
-        .send(message.to_string())
-        .unwrap();
+    app_control.ws_sender.send(message.to_string()).unwrap();
 }
 
 fn on_offer_created(
@@ -260,7 +263,8 @@ fn send_ice_candidate_message(
     app_control: &Arc<Mutex<AppControl>>,
     values: &[glib::Value],
 ) -> Option<glib::Value> {
-    if app_control.lock().unwrap().app_state < AppState::PeerCallNegotiating {
+    let app_control = app_control.lock().unwrap();
+    if app_control.app_state < AppState::PeerCallNegotiating {
         panic!("Can't send ICE, not in call");
     }
 
@@ -273,12 +277,7 @@ fn send_ice_candidate_message(
             "sdpMLineIndex": mlineindex,
           }
         });
-    app_control
-        .lock()
-        .unwrap()
-        .out
-        .send(message.to_string())
-        .unwrap();
+    app_control.ws_sender.send(message.to_string()).unwrap();
     None
 }
 
@@ -326,7 +325,8 @@ struct WsClient {
 
 struct AppControl {
     app_state: AppState,
-    out: ws::Sender,
+    ws_sender: ws::Sender,
+    peer_id: String,
 }
 
 impl WsClient {
@@ -338,7 +338,6 @@ impl WsClient {
 impl ws::Handler for WsClient {
     fn on_open(&mut self, _: ws::Handshake) -> ws::Result<()> {
         self.update_state(AppState::ServerConnected);
-        // TODO: replace with random
         self.update_state(register_with_server(&self.app_control.clone()));
         Ok(())
     }
@@ -348,7 +347,6 @@ impl ws::Handler for WsClient {
         let msg_text = msg.into_text().unwrap();
         if msg_text == "HELLO" {
             if self.app_control.lock().unwrap().app_state != AppState::ServerRegistering {
-                // TODO: signal and cleanup
                 panic!("ERROR: Received HELLO when not registering");
             }
             self.update_state(AppState::ServerRegistered);
@@ -357,7 +355,6 @@ impl ws::Handler for WsClient {
         }
         if msg_text == "SESSION_OK" {
             if self.app_control.lock().unwrap().app_state != AppState::PeerConnecting {
-                // TODO: signal and cleanup
                 panic!("ERROR: Received SESSION_OK when not calling");
             }
             self.update_state(AppState::PeerConnected);
@@ -391,7 +388,7 @@ impl ws::Handler for WsClient {
             self.app_control
                 .lock()
                 .unwrap()
-                .out
+                .ws_sender
                 .close(ws::CloseCode::Normal)
                 .unwrap();
             panic!("Got websocket error {:?}", error);
@@ -440,25 +437,53 @@ impl ws::Handler for WsClient {
 
         Ok(())
     }
+
+    fn on_close(&mut self, _code: ws::CloseCode, _reason: &str) {
+        self.app_control.lock().unwrap().app_state = AppState::ServerClosed;
+    }
 }
 
-fn connect_to_websocket_server_async() {
-    ws::connect("ws://signalling:8443", |out| WsClient {
+fn connect_to_websocket_server_async(peer_id: &str, server: &str) {
+    println!("Connecting to server {}", server);
+    ws::connect(server, |ws_sender| WsClient {
         webrtc: None,
         app_control: Arc::new(Mutex::new(AppControl {
-            out: out,
+            ws_sender: ws_sender,
+            peer_id: peer_id.to_string(),
             app_state: AppState::ServerConnecting,
         })),
     }).unwrap();
 }
 
 fn main() {
+    let matches = clap::App::new("Sendrcv rust")
+        .arg(
+            clap::Arg::with_name("peer-id")
+                .help("String ID of the peer to connect to")
+                .long("peer-id")
+                .required(true)
+                .takes_value(true),
+        )
+        .arg(
+            clap::Arg::with_name("server")
+                .help("Signalling server to connect to")
+                .long("server")
+                .required(false)
+                .takes_value(true),
+        )
+        .get_matches();
+
     gst::init().unwrap();
 
     if !check_plugins() {
         return;
     }
     let main_loop = glib::MainLoop::new(None, false);
-    connect_to_websocket_server_async();
+    connect_to_websocket_server_async(
+        matches.value_of("peer-id").unwrap(),
+        matches
+            .value_of("server")
+            .unwrap_or("wss://webrtc.nirbheek.in:8443"),
+    );
     main_loop.run();
 }

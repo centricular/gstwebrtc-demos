@@ -1,13 +1,12 @@
 version: '3'
 
 services:
+  # uncomment the sendrecv you would like to use
+  #
   # sendrecv-gst:
   #   build: ./sendrecv/gst
   sendrecv-gst-rust:
     build: ./sendrecv/gst-rust
-    command: sleep 10000
-    volumes: 
-      - ./sendrecv/gst-rust/src:/opt/src
   sendrecv-js:
     build: ./sendrecv/js
     ports:

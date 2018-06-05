@@ -4,13 +4,13 @@ version = "0.1.0"
 authors = ["maxmcd <max.t.mcdonnell@gmail.com>"]
 
 [dependencies]
+clap = "2.31.2"
+glib = { git = "https://github.com/gtk-rs/glib" }
 gstreamer = { git = "https://github.com/sdroege/gstreamer-rs", features = ["v1_14"] }
 gstreamer-rtsp-server = { git = "https://github.com/sdroege/gstreamer-rs" }
-gstreamer-webrtc = { git = "https://github.com/sdroege/gstreamer-rs" }
 gstreamer-sdp = { git = "https://github.com/sdroege/gstreamer-rs" }
 gstreamer-sdp-sys = { git = "https://github.com/sdroege/gstreamer-sys" }
-
-glib = { git = "https://github.com/gtk-rs/glib" }
+gstreamer-webrtc = { git = "https://github.com/sdroege/gstreamer-rs" }
+rand = "0.5"
 serde_json = "1.0.19"
 ws = "0.7.6"
-rand = "0.5"

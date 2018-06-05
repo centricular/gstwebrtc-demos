@@ -14,8 +14,7 @@ RUN sed -i 's/strict_ssl = TRUE/strict_ssl = FALSE/g' \
 
 RUN make
 
-# ENV GST_DEBUG=5
-CMD echo "Waiting a few seconds for you to open the browser" \
-    && sleep 7 \
+CMD echo "Waiting a few seconds for you to open the browser at localhost:8080" \
+    && sleep 10 \
     && ./webrtc-sendrecv --peer-id=1
 
