@@ -9,7 +9,6 @@ extern crate ws;
 #[macro_use]
 extern crate serde_json;
 
-use glib::translate::*;
 use gst::prelude::*;
 use gst::{BinExt, ElementExt};
 use rand::Rng;
@@ -112,14 +111,6 @@ fn register_with_server(app_control: &Arc<Mutex<AppControl>>) -> AppState {
     return AppState::ServerRegistering;
 }
 
-fn sdp_message_as_text(offer: gstreamer_webrtc::WebRTCSessionDescription) -> Option<String> {
-    unsafe {
-        from_glib_full(gstreamer_sdp_sys::gst_sdp_message_as_text(
-            (*offer.to_glib_none().0).sdp,
-        ))
-    }
-}
-
 fn send_sdp_offer(
     app_control: &Arc<Mutex<AppControl>>,
     offer: gstreamer_webrtc::WebRTCSessionDescription,
@@ -130,11 +121,11 @@ fn send_sdp_offer(
         panic!("Can't send offer, not in call");
     };
     let message = json!({
-          "sdp": {
-            "type": "offer",
-            "sdp": sdp_message_as_text(offer).unwrap(),
-          }
-        });
+      "sdp": {
+        "type": "offer",
+        "sdp": offer.get_sdp().as_text().unwrap(),
+      }
+    });
     app_control.ws_sender.send(message.to_string()).unwrap();
 }
 
