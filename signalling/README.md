@@ -32,12 +32,6 @@ $ ./session-client.py --call ws-test-client-8f63b9
 $ ./room-client.py --room 123
 Our uid is 'ws-test-client-bdb5b9'
 Got ROOM_OK for room '123'
-
-Our uid is 'ws-test-client-78b59a'
-Got ROOM_OK for room '123'
-Sending offer to 'ws-test-client-bdb5b9'
-Sent: ROOM_PEER_MSG ws-test-client-bdb5b9 {"sdp": "initial sdp"}
-Got answer from 'ws-test-client-bdb5b9': {"sdp": "reply sdp"}
 ```
 
 Another window
