@@ -65,7 +65,7 @@ http://blog.nirbheek.in/2018/02/gstreamer-webrtc.html
 
 #### Running the C version
 
-* Build the sources in the `gst/` directory on your machine
+* Build the sources in the `gst/` directory on your machine. Use `make` or
 
 ```console
 $ gcc webrtc-sendrecv.c $(pkg-config --cflags --libs gstreamer-webrtc-1.0 gstreamer-sdp-1.0 libsoup-2.4 json-glib-1.0) -o webrtc-sendrecv
