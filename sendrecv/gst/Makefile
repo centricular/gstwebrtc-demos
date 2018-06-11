@@ -6,6 +6,6 @@ CFLAGS := -O0 -ggdb -Wall -fno-omit-frame-pointer \
           -I/usr/lib/x86_64-linux-gnu/glib-2.0/include \
           -I/usr/include/libsoup-2.4 \
           -I/usr/include/json-glib-1.0
- 
+
 webrtc-sendrecv: webrtc-sendrecv.c
-        "$(CC)" $(CFLAGS) $^ $(LIBS) -o $@
+	"$(CC)" $(CFLAGS) $^ $(LIBS) -o $@
