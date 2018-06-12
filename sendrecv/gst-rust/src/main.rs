@@ -1,13 +1,16 @@
 extern crate clap;
+extern crate failure;
 extern crate glib;
 extern crate gstreamer as gst;
 extern crate gstreamer_sdp as gst_sdp;
 extern crate gstreamer_webrtc as gst_webrtc;
 extern crate rand;
-extern crate ws;
+extern crate serde;
+#[macro_use]
+extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
-extern crate failure;
+extern crate ws;
 
 use failure::Error;
 use gst::prelude::*;
@@ -392,6 +395,21 @@ impl WsClient {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum JsonMsg {
+    Ice {
+        candidate: String,
+        #[serde(rename = "sdpMLineIndex")]
+        sdp_mline_index: u32,
+    },
+    Sdp {
+        #[serde(rename = "type")]
+        type_: String,
+        sdp: String,
+    },
+}
+
 impl ws::Handler for WsClient {
     fn on_open(&mut self, _: ws::Handshake) -> ws::Result<()> {
         self.update_state(AppState::ServerConnected);
@@ -452,41 +470,40 @@ impl ws::Handler for WsClient {
             // TODO: signal & cleanup
         }
 
-        let json_msg: serde_json::Value = serde_json::from_str(&msg_text).unwrap();
-        if json_msg.get("sdp").is_some() {
-            assert_eq!(
-                self.app_control.lock().unwrap().app_state,
-                AppState::PeerCallNegotiating
-            );
+        let json_msg: JsonMsg = serde_json::from_str(&msg_text).unwrap();
+        match json_msg {
+            JsonMsg::Sdp { type_, sdp } => {
+                assert_eq!(
+                    self.app_control.lock().unwrap().app_state,
+                    AppState::PeerCallNegotiating
+                );
 
-            if !json_msg["sdp"].get("type").is_some() {
-                println!("ERROR: received SDP without 'type'");
-                return Ok(());
+                assert_eq!(type_, "answer");
+                print!("Received answer:\n{}\n", sdp);
+
+                let ret = gst_sdp::SDPMessage::parse_buffer(sdp.as_bytes()).unwrap();
+                let answer = gst_webrtc::WebRTCSessionDescription::new(
+                    gst_webrtc::WebRTCSDPType::Answer,
+                    ret,
+                );
+                let promise = gst::Promise::new();
+                self.webrtc
+                    .as_ref()
+                    .unwrap()
+                    .emit("set-remote-description", &[&answer, &promise])
+                    .unwrap();
+                self.update_state(AppState::PeerCallStarted);
             }
-            let sdptype = &json_msg["sdp"]["type"];
-            assert_eq!(sdptype, "answer");
-            let text = &json_msg["sdp"]["sdp"];
-            print!("Received answer:\n{}\n", text.as_str().unwrap());
-
-            let ret = gst_sdp::SDPMessage::parse_buffer(text.as_str().unwrap().as_bytes()).unwrap();
-            let answer =
-                gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Answer, ret);
-            let promise = gst::Promise::new();
-            self.webrtc
-                .as_ref()
-                .unwrap()
-                .emit("set-remote-description", &[&answer, &promise])
-                .unwrap();
-            self.update_state(AppState::PeerCallStarted);
-        }
-        if json_msg.get("ice").is_some() {
-            let candidate = json_msg["ice"]["candidate"].as_str().unwrap();
-            let sdpmlineindex = json_msg["ice"]["sdpMLineIndex"].as_u64().unwrap() as u32;
-            self.webrtc
-                .as_ref()
-                .unwrap()
-                .emit("add-ice-candidate", &[&sdpmlineindex, &candidate])
-                .unwrap();
+            JsonMsg::Ice {
+                sdp_mline_index,
+                candidate,
+            } => {
+                self.webrtc
+                    .as_ref()
+                    .unwrap()
+                    .emit("add-ice-candidate", &[&sdp_mline_index, &candidate])
+                    .unwrap();
+            }
         }
 
         Ok(())
