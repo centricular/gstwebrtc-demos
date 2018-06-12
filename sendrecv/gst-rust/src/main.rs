@@ -1,14 +1,15 @@
 extern crate clap;
 extern crate glib;
 extern crate gstreamer as gst;
-extern crate gstreamer_sdp;
-extern crate gstreamer_sdp_sys;
-extern crate gstreamer_webrtc;
+extern crate gstreamer_sdp as gst_sdp;
+extern crate gstreamer_webrtc as gst_webrtc;
 extern crate rand;
 extern crate ws;
 #[macro_use]
 extern crate serde_json;
+extern crate failure;
 
+use failure::Error;
 use gst::prelude::*;
 use gst::{BinExt, ElementExt};
 use rand::Rng;
@@ -32,34 +33,29 @@ enum AppState {
     PeerCallStarted,
     PeerCallError,
 }
-#[derive(Debug)]
-enum Error {
-    GlibError(glib::Error),
-    GlibBoolError(glib::BoolError),
-    GstStateChangeError(gst::StateChangeError),
-}
 
-impl From<glib::Error> for Error {
-    fn from(error: glib::Error) -> Self {
-        Error::GlibError(error)
-    }
-}
+const STUN_SERVER: &'static str = "stun://stun.l.google.com:19302 ";
 
-impl From<glib::BoolError> for Error {
-    fn from(error: glib::BoolError) -> Self {
-        Error::GlibBoolError(error)
-    }
+fn rtp_caps_opus() -> gst::GstRc<gst::CapsRef> {
+    gst::Caps::new_simple(
+        "application/x-rtp",
+        &[
+            ("media", &"audio"),
+            ("encoding-name", &"OPUS"),
+            ("payload", &(97i32)),
+        ],
+    )
 }
-
-impl From<gst::StateChangeError> for Error {
-    fn from(error: gst::StateChangeError) -> Self {
-        Error::GstStateChangeError(error)
-    }
+fn rtp_caps_vp8() -> gst::GstRc<gst::CapsRef> {
+    gst::Caps::new_simple(
+        "application/x-rtp",
+        &[
+            ("media", &"video"),
+            ("encoding-name", &"VP8"),
+            ("payload", &(96i32)),
+        ],
+    )
 }
-
-const STUN_SERVER: &'static str = "stun-server=stun://stun.l.google.com:19302 ";
-const RTP_CAPS_OPUS: &'static str = "application/x-rtp,media=audio,encoding-name=OPUS,payload=";
-const RTP_CAPS_VP8: &'static str = "application/x-rtp,media=video,encoding-name=VP8,payload=";
 
 fn check_plugins() -> bool {
     let needed = vec![
@@ -82,7 +78,7 @@ fn check_plugins() -> bool {
             ret = false;
         }
     }
-    return ret;
+    ret
 }
 
 fn setup_call(app_control: &Arc<Mutex<AppControl>>) -> AppState {
@@ -96,7 +92,7 @@ fn setup_call(app_control: &Arc<Mutex<AppControl>>) -> AppState {
         .ws_sender
         .send(format!("SESSION {}", app_control.peer_id))
         .unwrap();
-    return AppState::PeerConnecting;
+    AppState::PeerConnecting
 }
 
 fn register_with_server(app_control: &Arc<Mutex<AppControl>>) -> AppState {
@@ -108,12 +104,12 @@ fn register_with_server(app_control: &Arc<Mutex<AppControl>>) -> AppState {
         .ws_sender
         .send(format!("HELLO {}", our_id))
         .unwrap();
-    return AppState::ServerRegistering;
+    AppState::ServerRegistering
 }
 
 fn send_sdp_offer(
     app_control: &Arc<Mutex<AppControl>>,
-    offer: gstreamer_webrtc::WebRTCSessionDescription,
+    offer: gst_webrtc::WebRTCSessionDescription,
 ) {
     let app_control = app_control.lock().unwrap();
     if app_control.app_state < AppState::PeerCallNegotiating {
@@ -143,7 +139,7 @@ fn on_offer_created(
     let offer = reply
         .get_value("offer")
         .unwrap()
-        .get::<gstreamer_webrtc::WebRTCSessionDescription>()
+        .get::<gst_webrtc::WebRTCSessionDescription>()
         .expect("Invalid argument");
     webrtc
         .emit("set-local-description", &[&offer, &None::<gst::Promise>])
@@ -160,22 +156,29 @@ fn on_negotiation_needed(
     let webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
     let webrtc_clone = webrtc.clone();
     let app_control_clone = app_control.clone();
-    let promise = gst::Promise::new_with_change_func(move |promise: &gst::Promise| {
+    let promise = gst::Promise::new_with_change_func(move |promise| {
         on_offer_created(&app_control_clone, webrtc, promise);
     });
-    let options = gst::Structure::new_empty("options");
     webrtc_clone
-        .emit("create-offer", &[&options, &promise])
+        .emit("create-offer", &[&None::<gst::Structure>, &promise])
         .unwrap();
     None
 }
 
+enum MediaType {
+    Audio,
+    Video,
+}
+
 fn handle_media_stream(
     pad: &gst::Pad,
-    pipe: &gst::Element,
-    convert_name: &str,
-    sink_name: &str,
+    pipe: &gst::Pipeline,
+    media_type: MediaType,
 ) -> Result<(), Error> {
+    let (convert_name, sink_name) = match media_type {
+        MediaType::Video => ("videoconvert", "autovideosink"),
+        MediaType::Audio => ("audioconvert", "autoaudiosink"),
+    };
     println!(
         "Trying to handle stream with {} ! {}",
         convert_name, sink_name,
@@ -184,23 +187,22 @@ fn handle_media_stream(
     let conv = gst::ElementFactory::make(convert_name, None).unwrap();
     let sink = gst::ElementFactory::make(sink_name, None).unwrap();
 
-    let pipe_bin = pipe.clone().dynamic_cast::<gst::Bin>().unwrap();
+    match media_type {
+        MediaType::Audio => {
+            let resample = gst::ElementFactory::make("audioresample", None).unwrap();
+            pipe.add_many(&[&q, &conv, &resample, &sink])?;
+            gst::Element::link_many(&[&q, &conv, &resample, &sink])?;
+            resample.sync_state_with_parent()?;
+        }
+        MediaType::Video => {
+            pipe.add_many(&[&q, &conv, &sink])?;
+            gst::Element::link_many(&[&q, &conv, &sink])?;
+        }
+    };
+    q.sync_state_with_parent()?;
+    conv.sync_state_with_parent()?;
+    sink.sync_state_with_parent()?;
 
-    if convert_name == "audioconvert" {
-        let resample = gst::ElementFactory::make("audioresample", None).unwrap();
-        pipe_bin.add_many(&[&q, &conv, &resample, &sink])?;
-        q.sync_state_with_parent()?;
-        conv.sync_state_with_parent()?;
-        resample.sync_state_with_parent()?;
-        sink.sync_state_with_parent()?;
-        gst::Element::link_many(&[&q, &conv, &resample, &sink])?;
-    } else {
-        pipe_bin.add_many(&[&q, &conv, &sink])?;
-        q.sync_state_with_parent()?;
-        conv.sync_state_with_parent()?;
-        sink.sync_state_with_parent()?;
-        gst::Element::link_many(&[&q, &conv, &sink])?;
-    }
     let qpad = q.get_static_pad("sink").unwrap();
     let ret = pad.link(&qpad);
     assert_eq!(ret, gst::PadLinkReturn::Ok);
@@ -209,7 +211,7 @@ fn handle_media_stream(
 
 fn on_incoming_decodebin_stream(
     values: &[glib::Value],
-    pipe: &gst::Element,
+    pipe: &gst::Pipeline,
 ) -> Option<glib::Value> {
     let pad = values[1].get::<gst::Pad>().expect("Invalid argument");
     if !pad.has_current_caps() {
@@ -219,9 +221,9 @@ fn on_incoming_decodebin_stream(
     let caps = pad.get_current_caps().unwrap();
     let name = caps.get_structure(0).unwrap().get_name();
     match if name.starts_with("video") {
-        handle_media_stream(&pad, &pipe, "videoconvert", "autovideosink")
+        handle_media_stream(&pad, &pipe, MediaType::Video)
     } else if name.starts_with("audio") {
-        handle_media_stream(&pad, &pipe, "audioconvert", "autoaudiosink")
+        handle_media_stream(&pad, &pipe, MediaType::Audio)
     } else {
         println!("Unknown pad {:?}, ignoring", pad);
         Ok(())
@@ -231,7 +233,7 @@ fn on_incoming_decodebin_stream(
     };
 }
 
-fn on_incoming_stream(values: &[glib::Value], pipe: &gst::Element) -> Option<glib::Value> {
+fn on_incoming_stream(values: &[glib::Value], pipe: &gst::Pipeline) -> Option<glib::Value> {
     let webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
     let decodebin = gst::ElementFactory::make("decodebin", None).unwrap();
     let pipe_clone = pipe.clone();
@@ -272,16 +274,81 @@ fn send_ice_candidate_message(
     None
 }
 
+fn add_video_source(pipeline: &gst::Pipeline, webrtcbin: &gst::Element) -> Result<(), Error> {
+    let videotestsrc = gst::ElementFactory::make("videotestsrc", None).unwrap();
+    videotestsrc.set_property_from_str("pattern", "ball");
+    let videoconvert = gst::ElementFactory::make("videoconvert", None).unwrap();
+    let queue = gst::ElementFactory::make("queue", None).unwrap();
+    let vp8enc = gst::ElementFactory::make("vp8enc", None).unwrap();
+    vp8enc.set_property("deadline", &1i64)?;
+    let rtpvp8pay = gst::ElementFactory::make("rtpvp8pay", None).unwrap();
+    let queue2 = gst::ElementFactory::make("queue", None).unwrap();
+    pipeline.add_many(&[
+        &videotestsrc,
+        &videoconvert,
+        &queue,
+        &vp8enc,
+        &rtpvp8pay,
+        &queue2,
+    ])?;
+    gst::Element::link_many(&[
+        &videotestsrc,
+        &videoconvert,
+        &queue,
+        &vp8enc,
+        &rtpvp8pay,
+        &queue2,
+    ])?;
+    queue2.link_filtered(webrtcbin, &rtp_caps_vp8())?;
+    Ok(())
+}
+
+fn add_audio_source(pipeline: &gst::Pipeline, webrtcbin: &gst::Element) -> Result<(), Error> {
+    let audiotestsrc = gst::ElementFactory::make("audiotestsrc", None).unwrap();
+    audiotestsrc.set_property_from_str("wave", "red-noise");
+    let queue = gst::ElementFactory::make("queue", None).unwrap();
+    let audioconvert = gst::ElementFactory::make("audioconvert", None).unwrap();
+    let audioresample = gst::ElementFactory::make("audioresample", None).unwrap();
+    let queue2 = gst::ElementFactory::make("queue", None).unwrap();
+    let opusenc = gst::ElementFactory::make("opusenc", None).unwrap();
+    let rtpopuspay = gst::ElementFactory::make("rtpopuspay", None).unwrap();
+    let queue3 = gst::ElementFactory::make("queue", None).unwrap();
+    pipeline.add_many(&[
+        &audiotestsrc,
+        &queue,
+        &audioconvert,
+        &audioresample,
+        &queue2,
+        &opusenc,
+        &rtpopuspay,
+        &queue3,
+    ])?;
+    gst::Element::link_many(&[
+        &audiotestsrc,
+        &queue,
+        &audioconvert,
+        &audioresample,
+        &queue2,
+        &opusenc,
+        &rtpopuspay,
+        &queue3,
+    ])?;
+    queue3.link_filtered(webrtcbin, &rtp_caps_opus())?;
+    Ok(())
+}
+
+fn construct_pipeline() -> Result<gst::Pipeline, Error> {
+    let pipeline = gst::Pipeline::new(None);
+    let webrtcbin = gst::ElementFactory::make("webrtcbin", "sendrecv").unwrap();
+    pipeline.add(&webrtcbin)?;
+    webrtcbin.set_property_from_str("stun-server", STUN_SERVER);
+    add_video_source(&pipeline, &webrtcbin)?;
+    add_audio_source(&pipeline, &webrtcbin)?;
+    Ok(pipeline)
+}
+
 fn start_pipeline(app_control: &Arc<Mutex<AppControl>>) -> Result<gst::Element, Error> {
-    let pipe = gst::parse_launch(&format!(
-        "webrtcbin name=sendrecv {}
-        videotestsrc pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay !
-        queue ! {}96 ! sendrecv.
-        audiotestsrc wave=red-noise ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay !
-        queue ! {}97 ! sendrecv.
-        ",
-        STUN_SERVER, RTP_CAPS_VP8, RTP_CAPS_OPUS
-    ))?;
+    let pipe = construct_pipeline()?;
 
     let webrtc = pipe.clone()
         .dynamic_cast::<gst::Bin>()
@@ -299,14 +366,13 @@ fn start_pipeline(app_control: &Arc<Mutex<AppControl>>) -> Result<gst::Element, 
     })?;
 
     let pipe_clone = pipe.clone();
-    // TODO: replace with webrtc.connect_pad_added
     webrtc.connect("pad-added", false, move |values| {
         on_incoming_stream(values, &pipe_clone)
     })?;
 
     pipe.set_state(gst::State::Playing).into_result()?;
 
-    return Ok(webrtc);
+    Ok(webrtc)
 }
 
 struct WsClient {
@@ -402,12 +468,9 @@ impl ws::Handler for WsClient {
             let text = &json_msg["sdp"]["sdp"];
             print!("Received answer:\n{}\n", text.as_str().unwrap());
 
-            let ret =
-                gstreamer_sdp::SDPMessage::parse_buffer(text.as_str().unwrap().as_bytes()).unwrap();
-            let answer = gstreamer_webrtc::WebRTCSessionDescription::new(
-                gstreamer_webrtc::WebRTCSDPType::Answer,
-                ret,
-            );
+            let ret = gst_sdp::SDPMessage::parse_buffer(text.as_str().unwrap().as_bytes()).unwrap();
+            let answer =
+                gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Answer, ret);
             let promise = gst::Promise::new();
             self.webrtc
                 .as_ref()
