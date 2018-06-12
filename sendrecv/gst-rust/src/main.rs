@@ -84,8 +84,8 @@ fn check_plugins() -> bool {
     ret
 }
 
-fn setup_call(app_control: &Arc<Mutex<AppControl>>) -> AppState {
-    let mut app_control = app_control.lock().unwrap();
+fn setup_call(app_control: &AppControl) {
+    let mut app_control = app_control.0.lock().unwrap();
     app_control.app_state = AppState::PeerConnecting;
     println!(
         "Setting up signalling server call with {}",
@@ -95,26 +95,24 @@ fn setup_call(app_control: &Arc<Mutex<AppControl>>) -> AppState {
         .ws_sender
         .send(format!("SESSION {}", app_control.peer_id))
         .unwrap();
-    AppState::PeerConnecting
 }
 
-fn register_with_server(app_control: &Arc<Mutex<AppControl>>) -> AppState {
-    let mut app_control = app_control.lock().unwrap();
+fn register_with_server(app_control: &AppControl) {
+    let mut app_control = app_control.0.lock().unwrap();
     app_control.app_state = AppState::ServerRegistering;
     let our_id = rand::thread_rng().gen_range(10, 10_000);
     println!("Registering id {} with server", our_id);
     app_control
         .ws_sender
         .send(format!("HELLO {}", our_id))
-        .unwrap();
-    AppState::ServerRegistering
+        .unwrap()
 }
 
 fn send_sdp_offer(
-    app_control: &Arc<Mutex<AppControl>>,
+    app_control: &AppControl,
     offer: gst_webrtc::WebRTCSessionDescription,
-) {
-    let app_control = app_control.lock().unwrap();
+) -> Result<(), Error> {
+    let app_control = app_control.0.lock().unwrap();
     if app_control.app_state < AppState::PeerCallNegotiating {
         // TODO signal and cleanup
         panic!("Can't send offer, not in call");
@@ -122,19 +120,20 @@ fn send_sdp_offer(
     let message = json!({
       "sdp": {
         "type": "offer",
-        "sdp": offer.get_sdp().as_text().unwrap(),
+        "sdp": offer.get_sdp().as_text(),
       }
     });
-    app_control.ws_sender.send(message.to_string()).unwrap();
+    app_control.ws_sender.send(message.to_string())?;
+    Ok(())
 }
 
 fn on_offer_created(
-    app_control: &Arc<Mutex<AppControl>>,
+    app_control: &AppControl,
     webrtc: gst::Element,
     promise: &gst::Promise,
-) {
+) -> Result<(), Error> {
     assert_eq!(
-        app_control.lock().unwrap().app_state,
+        app_control.0.lock().unwrap().app_state,
         AppState::PeerCallNegotiating
     );
     let reply = promise.get_reply().unwrap();
@@ -144,28 +143,23 @@ fn on_offer_created(
         .unwrap()
         .get::<gst_webrtc::WebRTCSessionDescription>()
         .expect("Invalid argument");
-    webrtc
-        .emit("set-local-description", &[&offer, &None::<gst::Promise>])
-        .unwrap();
+    webrtc.emit("set-local-description", &[&offer, &None::<gst::Promise>])?;
 
-    send_sdp_offer(app_control, offer)
+    send_sdp_offer(&app_control, offer)?;
+    Ok(())
 }
 
-fn on_negotiation_needed(
-    app_control: &Arc<Mutex<AppControl>>,
-    values: &[glib::Value],
-) -> Option<glib::Value> {
-    app_control.lock().unwrap().app_state = AppState::PeerCallNegotiating;
-    let webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
+fn on_negotiation_needed(app_control: &AppControl, values: &[glib::Value]) -> Result<(), Error> {
+    app_control.0.lock().unwrap().app_state = AppState::PeerCallNegotiating;
+    let webrtc = values[0].get::<gst::Element>().unwrap();
     let webrtc_clone = webrtc.clone();
     let app_control_clone = app_control.clone();
     let promise = gst::Promise::new_with_change_func(move |promise| {
-        on_offer_created(&app_control_clone, webrtc, promise);
+        // handle
+        on_offer_created(&app_control_clone, webrtc, promise).unwrap();
     });
-    webrtc_clone
-        .emit("create-offer", &[&None::<gst::Structure>, &promise])
-        .unwrap();
-    None
+    webrtc_clone.emit("create-offer", &[&None::<gst::Structure>, &promise])?;
+    Ok(())
 }
 
 enum MediaType {
@@ -256,10 +250,10 @@ fn on_incoming_stream(values: &[glib::Value], pipe: &gst::Pipeline) -> Option<gl
 }
 
 fn send_ice_candidate_message(
-    app_control: &Arc<Mutex<AppControl>>,
+    app_control: &AppControl,
     values: &[glib::Value],
 ) -> Option<glib::Value> {
-    let app_control = app_control.lock().unwrap();
+    let app_control = app_control.0.lock().unwrap();
     if app_control.app_state < AppState::PeerCallNegotiating {
         panic!("Can't send ICE, not in call");
     }
@@ -350,7 +344,7 @@ fn construct_pipeline() -> Result<gst::Pipeline, Error> {
     Ok(pipeline)
 }
 
-fn start_pipeline(app_control: &Arc<Mutex<AppControl>>) -> Result<gst::Element, Error> {
+fn start_pipeline(app_control: &AppControl) -> Result<gst::Element, Error> {
     let pipe = construct_pipeline()?;
 
     let webrtc = pipe.clone()
@@ -360,7 +354,9 @@ fn start_pipeline(app_control: &Arc<Mutex<AppControl>>) -> Result<gst::Element, 
         .unwrap();
     let app_control_clone = app_control.clone();
     webrtc.connect("on-negotiation-needed", false, move |values| {
-        on_negotiation_needed(&app_control_clone, values)
+        // handle
+        on_negotiation_needed(&app_control_clone, values).unwrap();
+        None
     })?;
 
     let app_control_clone = app_control.clone();
@@ -378,20 +374,19 @@ fn start_pipeline(app_control: &Arc<Mutex<AppControl>>) -> Result<gst::Element, 
     Ok(webrtc)
 }
 
-struct WsClient {
-    webrtc: Option<gst::Element>,
-    app_control: Arc<Mutex<AppControl>>,
-}
+#[derive(Clone)]
+struct AppControl(Arc<Mutex<AppControlInner>>);
 
-struct AppControl {
+struct AppControlInner {
+    webrtc: Option<gst::Element>,
     app_state: AppState,
     ws_sender: ws::Sender,
     peer_id: String,
 }
 
-impl WsClient {
+impl AppControl {
     fn update_state(&self, state: AppState) {
-        self.app_control.lock().unwrap().app_state = state
+        self.0.lock().unwrap().app_state = state
     }
 }
 
@@ -410,10 +405,10 @@ enum JsonMsg {
     },
 }
 
-impl ws::Handler for WsClient {
+impl ws::Handler for AppControl {
     fn on_open(&mut self, _: ws::Handshake) -> ws::Result<()> {
         self.update_state(AppState::ServerConnected);
-        self.update_state(register_with_server(&self.app_control.clone()));
+        register_with_server(&self);
         Ok(())
     }
 
@@ -421,19 +416,23 @@ impl ws::Handler for WsClient {
         // Close the connection when we get a response from the server
         let msg_text = msg.into_text().unwrap();
         if msg_text == "HELLO" {
-            if self.app_control.lock().unwrap().app_state != AppState::ServerRegistering {
-                panic!("ERROR: Received HELLO when not registering");
+            {
+                if self.0.lock().unwrap().app_state != AppState::ServerRegistering {
+                    panic!("ERROR: Received HELLO when not registering");
+                }
             }
             self.update_state(AppState::ServerRegistered);
-            setup_call(&self.app_control.clone());
+            setup_call(&self);
             return Ok(());
         }
         if msg_text == "SESSION_OK" {
-            if self.app_control.lock().unwrap().app_state != AppState::PeerConnecting {
-                panic!("ERROR: Received SESSION_OK when not calling");
+            {
+                if self.0.lock().unwrap().app_state != AppState::PeerConnecting {
+                    panic!("ERROR: Received SESSION_OK when not calling");
+                }
             }
             self.update_state(AppState::PeerConnected);
-            self.webrtc = match start_pipeline(&self.app_control) {
+            self.0.lock().unwrap().webrtc = match start_pipeline(&self) {
                 Ok(webrtc) => Some(webrtc),
                 Err(err) => {
                     panic!("Failed to set up webrtc {:?}", err);
@@ -444,7 +443,8 @@ impl ws::Handler for WsClient {
 
         if msg_text.starts_with("ERROR") {
             println!("Got error message! {}", msg_text);
-            let error = match self.app_control.lock().unwrap().app_state {
+            let app_control = self.0.lock().unwrap();
+            let error = match app_control.app_state {
                 AppState::ServerConnecting => AppState::ServerConnectionError,
                 AppState::ServerRegistering => AppState::ServerRegisteringError,
                 AppState::PeerConnecting => AppState::PeerConnectionError,
@@ -460,23 +460,15 @@ impl ws::Handler for WsClient {
                 AppState::ServerClosed => AppState::AppStateErr,
                 AppState::PeerCallStarted => AppState::AppStateErr,
             };
-            self.app_control
-                .lock()
-                .unwrap()
-                .ws_sender
-                .close(ws::CloseCode::Normal)
-                .unwrap();
+            app_control.ws_sender.close(ws::CloseCode::Normal).unwrap();
             panic!("Got websocket error {:?}", error);
             // TODO: signal & cleanup
         }
-
+        let mut app_control = self.0.lock().unwrap();
         let json_msg: JsonMsg = serde_json::from_str(&msg_text).unwrap();
         match json_msg {
             JsonMsg::Sdp { type_, sdp } => {
-                assert_eq!(
-                    self.app_control.lock().unwrap().app_state,
-                    AppState::PeerCallNegotiating
-                );
+                assert_eq!(app_control.app_state, AppState::PeerCallNegotiating);
 
                 assert_eq!(type_, "answer");
                 print!("Received answer:\n{}\n", sdp);
@@ -487,42 +479,43 @@ impl ws::Handler for WsClient {
                     ret,
                 );
                 let promise = gst::Promise::new();
-                self.webrtc
+                app_control
+                    .webrtc
                     .as_ref()
                     .unwrap()
                     .emit("set-remote-description", &[&answer, &promise])
                     .unwrap();
-                self.update_state(AppState::PeerCallStarted);
+                app_control.app_state = AppState::PeerCallStarted;
             }
             JsonMsg::Ice {
                 sdp_mline_index,
                 candidate,
             } => {
-                self.webrtc
+                app_control
+                    .webrtc
                     .as_ref()
                     .unwrap()
                     .emit("add-ice-candidate", &[&sdp_mline_index, &candidate])
                     .unwrap();
             }
         }
-
         Ok(())
     }
 
     fn on_close(&mut self, _code: ws::CloseCode, _reason: &str) {
-        self.app_control.lock().unwrap().app_state = AppState::ServerClosed;
+        self.update_state(AppState::ServerClosed);
     }
 }
 
 fn connect_to_websocket_server_async(peer_id: &str, server: &str) {
     println!("Connecting to server {}", server);
-    ws::connect(server, |ws_sender| WsClient {
-        webrtc: None,
-        app_control: Arc::new(Mutex::new(AppControl {
+    ws::connect(server, |ws_sender| {
+        AppControl(Arc::new(Mutex::new(AppControlInner {
             ws_sender: ws_sender,
+            webrtc: None,
             peer_id: peer_id.to_string(),
             app_state: AppState::ServerConnecting,
-        })),
+        })))
     }).unwrap();
 }
 
