@@ -11,6 +11,8 @@ extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
 extern crate ws;
+#[macro_use]
+extern crate lazy_static;
 
 use failure::Error;
 use gst::prelude::*;
@@ -38,26 +40,27 @@ enum AppState {
 }
 
 const STUN_SERVER: &'static str = "stun://stun.l.google.com:19302 ";
-
-fn rtp_caps_opus() -> gst::GstRc<gst::CapsRef> {
-    gst::Caps::new_simple(
-        "application/x-rtp",
-        &[
-            ("media", &"audio"),
-            ("encoding-name", &"OPUS"),
-            ("payload", &(97i32)),
-        ],
-    )
-}
-fn rtp_caps_vp8() -> gst::GstRc<gst::CapsRef> {
-    gst::Caps::new_simple(
-        "application/x-rtp",
-        &[
-            ("media", &"video"),
-            ("encoding-name", &"VP8"),
-            ("payload", &(96i32)),
-        ],
-    )
+lazy_static! {
+    static ref RTP_CAPS_OPUS: gst::GstRc<gst::CapsRef> = {
+        gst::Caps::new_simple(
+            "application/x-rtp",
+            &[
+                ("media", &"audio"),
+                ("encoding-name", &"OPUS"),
+                ("payload", &(97i32)),
+            ],
+        )
+    };
+    static ref RTP_CAPS_VP8: gst::GstRc<gst::CapsRef> = {
+        gst::Caps::new_simple(
+            "application/x-rtp",
+            &[
+                ("media", &"video"),
+                ("encoding-name", &"VP8"),
+                ("payload", &(96i32)),
+            ],
+        )
+    };
 }
 
 fn check_plugins() -> bool {
@@ -162,6 +165,7 @@ fn on_negotiation_needed(app_control: &AppControl, values: &[glib::Value]) -> Re
     Ok(())
 }
 
+#[derive(Debug)]
 enum MediaType {
     Audio,
     Video,
@@ -172,28 +176,26 @@ fn handle_media_stream(
     pipe: &gst::Pipeline,
     media_type: MediaType,
 ) -> Result<(), Error> {
-    let (convert_name, sink_name) = match media_type {
-        MediaType::Video => ("videoconvert", "autovideosink"),
-        MediaType::Audio => ("audioconvert", "autoaudiosink"),
-    };
-    println!(
-        "Trying to handle stream with {} ! {}",
-        convert_name, sink_name,
-    );
-    let q = gst::ElementFactory::make("queue", None).unwrap();
-    let conv = gst::ElementFactory::make(convert_name, None).unwrap();
-    let sink = gst::ElementFactory::make(sink_name, None).unwrap();
+    println!("Trying to handle stream {:?}", media_type);
 
-    match media_type {
+    let (q, conv, sink) = match media_type {
         MediaType::Audio => {
+            let q = gst::ElementFactory::make("queue", None).unwrap();
+            let conv = gst::ElementFactory::make("audioconvert", None).unwrap();
+            let sink = gst::ElementFactory::make("autoaudiosink", None).unwrap();
             let resample = gst::ElementFactory::make("audioresample", None).unwrap();
             pipe.add_many(&[&q, &conv, &resample, &sink])?;
             gst::Element::link_many(&[&q, &conv, &resample, &sink])?;
             resample.sync_state_with_parent()?;
+            (q, conv, sink)
         }
         MediaType::Video => {
+            let q = gst::ElementFactory::make("queue", None).unwrap();
+            let conv = gst::ElementFactory::make("videoconvert", None).unwrap();
+            let sink = gst::ElementFactory::make("autovideosink", None).unwrap();
             pipe.add_many(&[&q, &conv, &sink])?;
             gst::Element::link_many(&[&q, &conv, &sink])?;
+            (q, conv, sink)
         }
     };
     q.sync_state_with_parent()?;
@@ -296,7 +298,7 @@ fn add_video_source(pipeline: &gst::Pipeline, webrtcbin: &gst::Element) -> Resul
         &rtpvp8pay,
         &queue2,
     ])?;
-    queue2.link_filtered(webrtcbin, &rtp_caps_vp8())?;
+    queue2.link_filtered(webrtcbin, &*RTP_CAPS_VP8)?;
     Ok(())
 }
 
@@ -330,7 +332,7 @@ fn add_audio_source(pipeline: &gst::Pipeline, webrtcbin: &gst::Element) -> Resul
         &rtpopuspay,
         &queue3,
     ])?;
-    queue3.link_filtered(webrtcbin, &rtp_caps_opus())?;
+    queue3.link_filtered(webrtcbin, &*RTP_CAPS_OPUS)?;
     Ok(())
 }
 
@@ -344,9 +346,8 @@ fn construct_pipeline() -> Result<gst::Pipeline, Error> {
     Ok(pipeline)
 }
 
-fn start_pipeline(app_control: &AppControl) -> Result<gst::Element, Error> {
+fn start_pipeline(app_control: &AppControl) -> Result<(gst::Element), Error> {
     let pipe = construct_pipeline()?;
-
     let webrtc = pipe.clone()
         .dynamic_cast::<gst::Bin>()
         .unwrap()
@@ -388,6 +389,81 @@ impl AppControl {
     fn update_state(&self, state: AppState) {
         self.0.lock().unwrap().app_state = state
     }
+    fn handle_hello(&self) {
+        {
+            let mut app_control = self.0.lock().unwrap();
+            if app_control.app_state != AppState::ServerRegistering {
+                panic!("ERROR: Received HELLO when not registering");
+            }
+            app_control.app_state = AppState::ServerRegistered;
+        }
+        setup_call(&self);
+    }
+    fn handle_session_ok(&self) {
+        {
+            let mut app_control = self.0.lock().unwrap();
+            if app_control.app_state != AppState::PeerConnecting {
+                panic!("ERROR: Received SESSION_OK when not calling");
+            }
+            app_control.app_state = AppState::PeerConnected;
+        }
+        self.0.lock().unwrap().webrtc = match start_pipeline(&self) {
+            Ok(webrtc) => Some(webrtc),
+            Err(err) => {
+                panic!("Failed to set up webrtc {:?}", err);
+            }
+        };
+    }
+    fn handle_error(&self) {
+        let app_control = self.0.lock().unwrap();
+        let error = match app_control.app_state {
+            AppState::ServerConnecting => AppState::ServerConnectionError,
+            AppState::ServerRegistering => AppState::ServerRegisteringError,
+            AppState::PeerConnecting => AppState::PeerConnectionError,
+            AppState::PeerConnected => AppState::PeerCallError,
+            AppState::PeerCallNegotiating => AppState::PeerCallError,
+            AppState::ServerConnectionError => AppState::ServerConnectionError,
+            AppState::ServerRegisteringError => AppState::ServerRegisteringError,
+            AppState::PeerConnectionError => AppState::PeerConnectionError,
+            AppState::PeerCallError => AppState::PeerCallError,
+            AppState::AppStateErr => AppState::AppStateErr,
+            AppState::ServerConnected => AppState::AppStateErr,
+            AppState::ServerRegistered => AppState::AppStateErr,
+            AppState::ServerClosed => AppState::AppStateErr,
+            AppState::PeerCallStarted => AppState::AppStateErr,
+        };
+        app_control.ws_sender.close(ws::CloseCode::Normal).unwrap();
+        panic!("Got websocket error {:?}", error);
+        // TODO: signal & cleanup
+    }
+    fn handle_sdp(&self, type_: String, sdp: String) {
+        let mut app_control = self.0.lock().unwrap();
+        assert_eq!(app_control.app_state, AppState::PeerCallNegotiating);
+
+        assert_eq!(type_, "answer");
+        print!("Received answer:\n{}\n", sdp);
+
+        let ret = gst_sdp::SDPMessage::parse_buffer(sdp.as_bytes()).unwrap();
+        let answer =
+            gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Answer, ret);
+        let promise = gst::Promise::new();
+        app_control
+            .webrtc
+            .as_ref()
+            .unwrap()
+            .emit("set-remote-description", &[&answer, &promise])
+            .unwrap();
+        app_control.app_state = AppState::PeerCallStarted;
+    }
+    fn handle_ice(&self, sdp_mline_index: u32, candidate: String) {
+        let app_control = self.0.lock().unwrap();
+        app_control
+            .webrtc
+            .as_ref()
+            .unwrap()
+            .emit("add-ice-candidate", &[&sdp_mline_index, &candidate])
+            .unwrap();
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -416,88 +492,26 @@ impl ws::Handler for AppControl {
         // Close the connection when we get a response from the server
         let msg_text = msg.into_text().unwrap();
         if msg_text == "HELLO" {
-            {
-                if self.0.lock().unwrap().app_state != AppState::ServerRegistering {
-                    panic!("ERROR: Received HELLO when not registering");
-                }
-            }
-            self.update_state(AppState::ServerRegistered);
-            setup_call(&self);
+            self.handle_hello();
             return Ok(());
         }
         if msg_text == "SESSION_OK" {
-            {
-                if self.0.lock().unwrap().app_state != AppState::PeerConnecting {
-                    panic!("ERROR: Received SESSION_OK when not calling");
-                }
-            }
-            self.update_state(AppState::PeerConnected);
-            self.0.lock().unwrap().webrtc = match start_pipeline(&self) {
-                Ok(webrtc) => Some(webrtc),
-                Err(err) => {
-                    panic!("Failed to set up webrtc {:?}", err);
-                }
-            };
+            self.handle_session_ok();
             return Ok(());
         }
 
         if msg_text.starts_with("ERROR") {
             println!("Got error message! {}", msg_text);
-            let app_control = self.0.lock().unwrap();
-            let error = match app_control.app_state {
-                AppState::ServerConnecting => AppState::ServerConnectionError,
-                AppState::ServerRegistering => AppState::ServerRegisteringError,
-                AppState::PeerConnecting => AppState::PeerConnectionError,
-                AppState::PeerConnected => AppState::PeerCallError,
-                AppState::PeerCallNegotiating => AppState::PeerCallError,
-                AppState::ServerConnectionError => AppState::ServerConnectionError,
-                AppState::ServerRegisteringError => AppState::ServerRegisteringError,
-                AppState::PeerConnectionError => AppState::PeerConnectionError,
-                AppState::PeerCallError => AppState::PeerCallError,
-                AppState::AppStateErr => AppState::AppStateErr,
-                AppState::ServerConnected => AppState::AppStateErr,
-                AppState::ServerRegistered => AppState::AppStateErr,
-                AppState::ServerClosed => AppState::AppStateErr,
-                AppState::PeerCallStarted => AppState::AppStateErr,
-            };
-            app_control.ws_sender.close(ws::CloseCode::Normal).unwrap();
-            panic!("Got websocket error {:?}", error);
-            // TODO: signal & cleanup
+            self.handle_error();
+            return Ok(());
         }
-        let mut app_control = self.0.lock().unwrap();
         let json_msg: JsonMsg = serde_json::from_str(&msg_text).unwrap();
         match json_msg {
-            JsonMsg::Sdp { type_, sdp } => {
-                assert_eq!(app_control.app_state, AppState::PeerCallNegotiating);
-
-                assert_eq!(type_, "answer");
-                print!("Received answer:\n{}\n", sdp);
-
-                let ret = gst_sdp::SDPMessage::parse_buffer(sdp.as_bytes()).unwrap();
-                let answer = gst_webrtc::WebRTCSessionDescription::new(
-                    gst_webrtc::WebRTCSDPType::Answer,
-                    ret,
-                );
-                let promise = gst::Promise::new();
-                app_control
-                    .webrtc
-                    .as_ref()
-                    .unwrap()
-                    .emit("set-remote-description", &[&answer, &promise])
-                    .unwrap();
-                app_control.app_state = AppState::PeerCallStarted;
-            }
+            JsonMsg::Sdp { type_, sdp } => self.handle_sdp(type_, sdp),
             JsonMsg::Ice {
                 sdp_mline_index,
                 candidate,
-            } => {
-                app_control
-                    .webrtc
-                    .as_ref()
-                    .unwrap()
-                    .emit("add-ice-candidate", &[&sdp_mline_index, &candidate])
-                    .unwrap();
-            }
+            } => self.handle_ice(sdp_mline_index, candidate),
         }
         Ok(())
     }
@@ -542,6 +556,20 @@ fn main() {
     if !check_plugins() {
         return;
     }
+    let main_pipeline = gst::Pipeline::new("main");
+    let bus = main_pipeline.get_bus().unwrap();
+    bus.add_watch(move |_, msg| {
+        // use gst::MessageView;
+        println!("got message");
+        match msg.view() {
+            // MessageView::StateChanged(_) => {}
+            // MessageView::StreamStatus(_) => {}
+            _ => println!("New bus message {:?}\r", msg),
+        };
+        // https://sdroege.github.io/rustdoc/gstreamer/gstreamer/message/enum.MessageView.html
+        glib::Continue(true)
+    });
+
     let main_loop = glib::MainLoop::new(None, false);
     connect_to_websocket_server_async(
         matches.value_of("peer-id").unwrap(),
