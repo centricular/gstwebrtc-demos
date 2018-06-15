@@ -9,7 +9,6 @@ extern crate rand;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
 extern crate serde_json;
 extern crate websocket;
 #[macro_use]
@@ -152,12 +151,10 @@ fn send_sdp_offer(app_control: &AppControl, offer: gst_webrtc::WebRTCSessionDesc
     ) {
         return;
     }
-    let message = json!({
-      "sdp": {
-        "type": "offer",
-        "sdp": offer.get_sdp().as_text(),
-      }
-    });
+    let message = serde_json::to_string(&JsonMsg::Sdp {
+        type_: "offer".to_string(),
+        sdp: offer.get_sdp().as_text().unwrap(),
+    }).unwrap();
     app_control.send_text_msg(message.to_string());
 }
 
@@ -297,16 +294,13 @@ fn send_ice_candidate_message(app_control: &AppControl, values: &[glib::Value]) 
     if !app_control.app_state_lt(AppState::PeerCallNegotiating, "Can't send ICE, not in call") {
         return;
     }
-
     let _webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
     let mlineindex = values[1].get::<u32>().expect("Invalid argument");
     let candidate = values[2].get::<String>().expect("Invalid argument");
-    let message = json!({
-          "ice": {
-            "candidate": candidate,
-            "sdpMLineIndex": mlineindex,
-          }
-        });
+    let message = serde_json::to_string(&JsonMsg::Ice {
+        candidate: candidate,
+        sdp_mline_index: mlineindex,
+    }).unwrap();
     app_control.send_text_msg(message.to_string());
 }
 
