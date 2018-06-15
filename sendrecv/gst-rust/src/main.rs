@@ -17,7 +17,6 @@ extern crate lazy_static;
 
 use failure::Error;
 use gst::prelude::*;
-use gst::{BinExt, ElementExt};
 use rand::Rng;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -49,7 +48,6 @@ lazy_static! {
 
 #[derive(PartialEq, PartialOrd, Eq, Debug)]
 enum AppState {
-    // AppStateUnknown = 0,
     AppStateErr = 1,
     ServerConnected,
     ServerRegistering = 2000,
@@ -116,7 +114,11 @@ struct PadLinkError {
     right: gst::PadLinkReturn,
 }
 
-fn check_plugins() -> bool {
+#[derive(Debug, Fail)]
+#[fail(display = "Missing elements {:?}", _0)]
+struct MissingElements(Vec<&'static str>);
+
+fn check_plugins() -> Result<(), Error> {
     let needed = vec![
         "opus",
         "vpx",
@@ -129,15 +131,18 @@ fn check_plugins() -> bool {
         "audiotestsrc",
     ];
     let registry = gst::Registry::get();
-    let mut ret = true;
+    let mut missing: Vec<&'static str> = Vec::new();
     for plugin_name in needed {
         let plugin = registry.find_plugin(&plugin_name.to_string());
         if plugin.is_none() {
-            println!("Required gstreamer plugin '{}' not found", plugin_name);
-            ret = false;
+            missing.push(plugin_name)
         }
     }
-    ret
+    if missing.len() > 0 {
+        Err(MissingElements(missing))?
+    } else {
+        Ok(())
+    }
 }
 
 fn send_sdp_offer(app_control: &AppControl, offer: gst_webrtc::WebRTCSessionDescription) {
@@ -425,7 +430,6 @@ impl AppControl {
             .unwrap();
         let app_control_clone = self.clone();
         webrtc.connect("on-negotiation-needed", false, move |values| {
-            // handle
             on_negotiation_needed(&app_control_clone, values).unwrap();
             None
         })?;
@@ -557,7 +561,6 @@ impl AppControl {
     }
 
     fn close_and_quit(&self, err: Error) {
-        // self.update_state(AppState::ServerClosed);
         let app_control = self.0.lock().unwrap();
         println!("{}\nquitting", err);
         app_control
@@ -646,16 +649,13 @@ fn receive_loop(
                     let _ = send_msg_tx.send(OwnedMessage::Close(None));
                     return;
                 }
-                OwnedMessage::Ping(data) => {
-                    match send_msg_tx.send(OwnedMessage::Pong(data)) {
-                        // Send a pong in response
-                        Ok(()) => (),
-                        Err(e) => {
-                            println!("Receive Loop error: {:?}", e);
-                            return;
-                        }
+                OwnedMessage::Ping(data) => match send_msg_tx.send(OwnedMessage::Pong(data)) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        println!("Receive Loop error: {:?}", e);
+                        return;
                     }
-                }
+                },
                 OwnedMessage::Text(msg) => {
                     let mbuilder = gst::Message::new_application(gst::Structure::new(
                         "ws-message",
@@ -674,8 +674,12 @@ fn receive_loop(
 
 fn main() {
     gst::init().unwrap();
-    if !check_plugins() {
-        return;
+    match check_plugins() {
+        Err(err) => {
+            println!("{:?}", err);
+            return;
+        }
+        _ => {}
     }
 
     let (server, peer_id) = parse_args();
