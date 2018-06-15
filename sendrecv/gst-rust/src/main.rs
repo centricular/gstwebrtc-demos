@@ -45,7 +45,7 @@ lazy_static! {
     };
 }
 
-#[derive(PartialEq, PartialOrd, Eq, Debug)]
+#[derive(PartialEq, PartialOrd, Eq, Debug, Clone)]
 enum AppState {
     AppStateErr = 1,
     ServerConnected,
@@ -99,7 +99,7 @@ struct AppControlInner {
 struct OutOfOrder(&'static str);
 
 #[derive(Debug, Fail)]
-#[fail(display = "Websocket error {:?}", _0)]
+#[fail(display = "Websocket error while app_state was {:?}", _0)]
 struct WsError(AppState);
 
 #[derive(Debug, Fail)]
@@ -561,14 +561,14 @@ impl AppControl {
             .pipeline
             .set_state(gst::State::Null)
             .into_result()
-            .unwrap();
+            .ok();
         app_control
             .send_msg_tx
             .send(OwnedMessage::Close(Some(websocket::message::CloseData {
                 status_code: 1011, //Internal Error
                 reason: err.to_string(),
             })))
-            .unwrap();
+            .ok();
         app_control.main_loop.quit();
     }
 }
@@ -633,7 +633,10 @@ fn receive_loop(
             let message = match message {
                 Ok(m) => m,
                 Err(e) => {
-                    println!("Receive Loop: {:?}", e);
+                    println!("Receive Loop error: {:?}", e);
+                    let mbuilder =
+                        gst::Message::new_application(gst::Structure::new("ws-error", &[]));
+                    let _ = bus.post(&mbuilder.build());
                     let _ = send_msg_tx.send(OwnedMessage::Close(None));
                     return;
                 }
@@ -659,11 +662,32 @@ fn receive_loop(
                 }
 
                 _ => {
-                    println!("got something");
+                    println!("Unmatched message type: {:?}", message);
                 }
             }
         }
     })
+}
+
+fn handle_application_msg(
+    app_control: &AppControl,
+    struc: &gst::StructureRef,
+) -> Result<(), Error> {
+    match struc.get_name() {
+        "ws-message" => {
+            let msg = struc.get_value("body").unwrap();
+            app_control.clone().on_message(msg.get().unwrap())
+        }
+        "ws-error" => Err(WsError(app_control.0.lock().unwrap().app_state.clone()))?,
+        "error" => {
+            let msg: String = struc.get_value("body").unwrap().get().unwrap();
+            Err(BusError(msg))?
+        }
+        _u => {
+            println!("Got unknown application message {:?}", _u);
+            Ok(())
+        }
+    }
 }
 
 fn main() {
@@ -728,26 +752,10 @@ fn main() {
             }
             MessageView::Application(a) => {
                 let struc = a.get_structure().unwrap();
-                match struc.get_name() {
-                    "ws-message" => {
-                        let msg = struc.get_value("body").unwrap();
-                        match app_control.clone().on_message(msg.get().unwrap()) {
-                            Err(err) => app_control.clone().close_and_quit(err),
-                            _ => {}
-                        }
-                    }
-                    "error" => {
-                        let msg: String = struc.get_value("body").unwrap().get().unwrap();
-                        // Maybe there's a more direct way to handle this?
-                        match |msg: String| -> Result<(), Error> { Err(BusError(msg))? }(msg) {
-                            Err(err) => app_control.clone().close_and_quit(err),
-                            _ => {}
-                        }
-                    }
-                    _u => {
-                        println!("Got unknown application message {:?}", _u);
-                    }
-                }
+                match handle_application_msg(&app_control, struc) {
+                    Err(err) => app_control.clone().close_and_quit(err),
+                    _ => {}
+                };
             }
             _ => println!("New bus message {:?}\r", msg),
         };
