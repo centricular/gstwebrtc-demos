@@ -17,6 +17,7 @@ extern crate lazy_static;
 use failure::Error;
 use gst::prelude::*;
 use rand::Rng;
+use std::cmp::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use websocket::message::OwnedMessage;
@@ -45,7 +46,7 @@ lazy_static! {
     };
 }
 
-#[derive(PartialEq, PartialOrd, Eq, Debug, Clone)]
+#[derive(PartialEq, PartialOrd, Eq, Debug, Clone, Ord)]
 enum AppState {
     AppStateErr = 1,
     ServerConnected,
@@ -145,10 +146,11 @@ fn check_plugins() -> Result<(), Error> {
 }
 
 fn send_sdp_offer(app_control: &AppControl, offer: gst_webrtc::WebRTCSessionDescription) {
-    if !app_control.app_state_lt(
+    if app_control.app_state_cmp(
         AppState::PeerCallNegotiating,
         "Can't send offer, not in call",
-    ) {
+    ) == Ordering::Less
+    {
         return;
     }
     let message = serde_json::to_string(&JsonMsg::Sdp {
@@ -291,7 +293,9 @@ fn on_incoming_stream(
 }
 
 fn send_ice_candidate_message(app_control: &AppControl, values: &[glib::Value]) {
-    if !app_control.app_state_lt(AppState::PeerCallNegotiating, "Can't send ICE, not in call") {
+    if app_control.app_state_cmp(AppState::PeerCallNegotiating, "Can't send ICE, not in call")
+        == Ordering::Less
+    {
         return;
     }
     let _webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
@@ -377,12 +381,13 @@ impl AppControl {
         }
     }
 
-    fn app_state_lt(&self, state: AppState, error_msg: &'static str) -> bool {
-        if { self.0.lock().unwrap().app_state < state } {
-            self.send_bus_error(String::from(error_msg));
-            false
-        } else {
-            true
+    fn app_state_cmp(&self, state: AppState, error_msg: &'static str) -> Ordering {
+        match { self.0.lock().unwrap().app_state.cmp(&state) } {
+            Ordering::Less => {
+                self.send_bus_error(String::from(error_msg));
+                Ordering::Less
+            }
+            _foo => _foo,
         }
     }
 
@@ -543,7 +548,7 @@ impl AppControl {
             println!("Got error message! {}", msg);
             return self.handle_error();
         }
-        let json_msg: JsonMsg = serde_json::from_str(&msg).unwrap();
+        let json_msg: JsonMsg = serde_json::from_str(&msg)?;
         match json_msg {
             JsonMsg::Sdp { type_, sdp } => self.handle_sdp(type_, sdp),
             JsonMsg::Ice {
@@ -740,13 +745,9 @@ fn main() {
     bus.add_watch(move |_, msg| {
         use gst::message::MessageView;
         match msg.view() {
-            MessageView::StateChanged(_) => {}
-            MessageView::StreamStatus(_) => {}
-            MessageView::Latency(_) => {}
-            MessageView::AsyncDone(_) => {}
-            MessageView::Element(_) => {}
-            MessageView::Tag(_) => {}
-            MessageView::NewClock(_) => {}
+            MessageView::Error(err) => app_control
+                .clone()
+                .close_and_quit(Error::from(err.get_error())),
             MessageView::Warning(warning) => {
                 println!("Warning: \"{}\"", warning.get_debug().unwrap());
             }
@@ -757,7 +758,7 @@ fn main() {
                     _ => {}
                 };
             }
-            _ => println!("New bus message {:?}\r", msg),
+            _ => {}
         };
         glib::Continue(true)
     });
