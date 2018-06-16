@@ -675,13 +675,13 @@ fn receive_loop(
 }
 
 fn handle_application_msg(
-    app_control: &AppControl,
+    app_control: &mut AppControl,
     struc: &gst::StructureRef,
 ) -> Result<(), Error> {
     match struc.get_name() {
         "ws-message" => {
             let msg = struc.get_value("body").unwrap();
-            app_control.clone().on_message(msg.get().unwrap())
+            app_control.on_message(msg.get().unwrap())
         }
         "ws-error" => Err(WsError(app_control.0.lock().unwrap().app_state.clone()))?,
         "error" => {
@@ -743,18 +743,17 @@ fn main() {
     app_control.register_with_server();
 
     bus.add_watch(move |_, msg| {
+        let mut app_control = app_control.clone();
         use gst::message::MessageView;
         match msg.view() {
-            MessageView::Error(err) => app_control
-                .clone()
-                .close_and_quit(Error::from(err.get_error())),
+            MessageView::Error(err) => app_control.close_and_quit(Error::from(err.get_error())),
             MessageView::Warning(warning) => {
                 println!("Warning: \"{}\"", warning.get_debug().unwrap());
             }
             MessageView::Application(a) => {
                 let struc = a.get_structure().unwrap();
-                match handle_application_msg(&app_control, struc) {
-                    Err(err) => app_control.clone().close_and_quit(err),
+                match handle_application_msg(&mut app_control, struc) {
+                    Err(err) => app_control.close_and_quit(err),
                     _ => {}
                 };
             }
