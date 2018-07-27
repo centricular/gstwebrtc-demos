@@ -18,6 +18,8 @@ One thing to note is that it's written in Python 2, so you may need to replace a
 
 ## Building GStreamer manually from source
 
+Here are the commands for Ubuntu 18.04.
+
 ```
 sudo apt-get install -y gstreamer1.0-tools gstreamer1.0-nice gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-plugins-good libgstreamer1.0-dev git libglib2.0-dev libgstreamer-plugins-bad1.0-dev libsoup2.4-dev libjson-glib-dev
 ```
