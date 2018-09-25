@@ -1,5 +1,6 @@
 FROM maxmcd/gstreamer:1.14-buster
 
+RUN apt-get update
 RUN apt-get install -y curl
 RUN wget -O rustup.sh https://sh.rustup.rs && sh ./rustup.sh -y
 ENV PATH=$PATH:/root/.cargo/bin/
