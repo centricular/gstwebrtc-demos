@@ -3,17 +3,51 @@ version: '3'
 services:
   # uncomment the sendrecv you would like to use
   #
-  # sendrecv-gst:
-  #   build: ./sendrecv/gst
-  sendrecv-gst-rust:
-    build: ./sendrecv/gst-rust
-  sendrecv-js:
-    build: ./sendrecv/js
-    ports:
-      - 8080:80
-    depends_on:
-      - signalling
-  signalling:
-    build: ./signalling
-    ports:
-      - 8443:8443
+  sendrecv-gst-0:
+    build: ./sendrecv/gst
+    environment:
+        - PEER_ID=1279
+    devices:
+        - "/dev/video10:/dev/video0"
+  sendrecv-gst-1:
+    build: ./sendrecv/gst
+    environment:
+        - PEER_ID=5805
+    devices:
+        - "/dev/video11:/dev/video0"
+  sendrecv-gst-2:
+    build: ./sendrecv/gst
+    environment:
+        - PEER_ID=3492
+    devices:
+        - "/dev/video12:/dev/video0"
+  sendrecv-gst-3:
+    build: ./sendrecv/gst
+    environment:
+        - PEER_ID=4394
+    devices:
+        - "/dev/video13:/dev/video0"
+  sendrecv-gst-4:
+    build: ./sendrecv/gst
+    environment:
+        - PEER_ID=8906
+    devices:
+        - "/dev/video10:/dev/video0"
+  sendrecv-gst-5:
+    build: ./sendrecv/gst
+    environment:
+        - PEER_ID=1280
+    devices:
+        - "/dev/video11:/dev/video0"
+  sendrecv-gst-6:
+    build: ./sendrecv/gst
+    environment:
+        - PEER_ID=1880
+    devices:
+        - "/dev/video12:/dev/video0"
+  sendrecv-gst-7:
+    build: ./sendrecv/gst
+    environment:
+        - PEER_ID=3667
+    devices:
+        - "/dev/video13:/dev/video0"
