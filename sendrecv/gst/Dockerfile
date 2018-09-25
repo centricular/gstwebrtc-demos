@@ -8,11 +8,12 @@ WORKDIR /opt/
 COPY . /opt/
 
 RUN make
+ENV PEER_ID=1
 
+#    --server=ws://signalling:8443 \
 CMD echo "Waiting a few seconds for you to open the browser at localhost:8080" \
     && sleep 10 \
     && ./webrtc-sendrecv \
-    --peer-id=1 \
-    --server=ws://signalling:8443 \
+    --peer-id=$PEER_ID \
     --disable-ssl
 
