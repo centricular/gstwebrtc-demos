@@ -33,7 +33,7 @@ public class WebrtcSendRecv {
     private static final String AUDIO_BIN_DESCRIPTION = "audiotestsrc ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay ! queue ! capsfilter caps=application/x-rtp,media=audio,encoding-name=OPUS,payload=96";
 
     private final String serverUrl;
-    private final String sessionId;
+    private final String peerId;
     private final ObjectMapper mapper = new ObjectMapper();
     private WebSocket websocket;
     private WebRTCBin webRTCBin;
@@ -41,18 +41,25 @@ public class WebrtcSendRecv {
 
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
-            logger.error("Please pass a session id from the signalling server: java -jar build/libs/gst-java.jar 1234");
+            logger.error("Please pass at least the peer-id from the signalling server e.g java -jar build/libs/gst-java.jar --peer-id=1234 --server=wss://webrtc.nirbheek.in:8443");
             return;
         }
-        String sessionId = args[0];
-        String serverUrl = args.length == 2 ? args[1] : REMOTE_SERVER_URL;
-        logger.info("Using session id from args: " + sessionId);
-        WebrtcSendRecv webrtcSendRecv = new WebrtcSendRecv(sessionId, serverUrl);
+        String serverUrl = REMOTE_SERVER_URL;
+        String peerId = null;
+        for (int i=0; i<args.length; i++) {
+            if (args[i].startsWith("--server=")) {
+                serverUrl = args[i].substring("--server=".length());
+            } else if (args[i].startsWith("--peer-id=")) {
+                peerId = args[i].substring("--peer-id=".length());
+            }
+        }
+        logger.info("Using peer id {}, on server: {}", peerId, serverUrl);
+        WebrtcSendRecv webrtcSendRecv = new WebrtcSendRecv(peerId, serverUrl);
         webrtcSendRecv.startCall();
     }
 
-    private WebrtcSendRecv(String sessionId, String serverUrl) {
-        this.sessionId = sessionId;
+    private WebrtcSendRecv(String peerId, String serverUrl) {
+        this.peerId = peerId;
         this.serverUrl = serverUrl;
         Gst.init();
         webRTCBin = new WebRTCBin("sendrecv");
@@ -102,7 +109,7 @@ public class WebrtcSendRecv {
         @Override
         public void onTextFrame(String payload, boolean finalFragment, int rsv) {
             if (payload.equals("HELLO")) {
-                websocket.sendTextFrame("SESSION " + sessionId);
+                websocket.sendTextFrame("SESSION " + peerId);
             } else if (payload.equals("SESSION_OK")) {
                 pipe.play();
             } else if (payload.startsWith("ERROR")) {

@@ -28,7 +28,9 @@ COPY --from=builder /home/gradle/work/build/libs/work.jar /gst-java.jar
 
 CMD echo "Waiting a few seconds for you to open the browser at localhost:8080" \
     && sleep 10 \
-    && java -jar /gst-java.jar 1 ws://signalling:8443
+    && java -jar /gst-java.jar \
+    --peer-id=1 \
+    --server=ws://signalling:8443
 
 
 
