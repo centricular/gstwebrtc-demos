@@ -27,10 +27,11 @@ import static org.asynchttpclient.Dsl.asyncHttpClient;
 public class WebrtcSendRecv {
 
     private static final Logger logger = LoggerFactory.getLogger(WebrtcSendRecv.class);
-    private static final String SERVER_URL = "wss://webrtc.nirbheek.in:8443";
+    private static final String REMOTE_SERVER_URL = "wss://webrtc.nirbheek.in:8443";
     private static final String VIDEO_BIN_DESCRIPTION = "videotestsrc ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay ! queue ! capsfilter caps=application/x-rtp,media=video,encoding-name=VP8,payload=97";
     private static final String AUDIO_BIN_DESCRIPTION = "audiotestsrc ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay ! queue ! capsfilter caps=application/x-rtp,media=audio,encoding-name=OPUS,payload=96";
 
+    private final String serverUrl;
     private final String sessionId;
     private final ObjectMapper mapper = new ObjectMapper();
     private WebSocket websocket;
@@ -43,13 +44,15 @@ public class WebrtcSendRecv {
             return;
         }
         String sessionId = args[0];
+        String serverUrl = args.length == 2 ? args[1] : REMOTE_SERVER_URL;
         logger.info("Using session id from args: " + sessionId);
-        WebrtcSendRecv webrtcSendRecv = new WebrtcSendRecv(sessionId);
+        WebrtcSendRecv webrtcSendRecv = new WebrtcSendRecv(sessionId, serverUrl);
         webrtcSendRecv.startCall();
     }
 
-    private WebrtcSendRecv(String sessionId) {
+    private WebrtcSendRecv(String sessionId, String serverUrl) {
         this.sessionId = sessionId;
+        this.serverUrl = serverUrl;
         Gst.init();
         webRTCBin = new WebRTCBin("sendrecv");
 
@@ -70,7 +73,7 @@ public class WebrtcSendRecv {
 
     private void startCall() throws Exception {
         websocket = asyncHttpClient()
-                .prepareGet(SERVER_URL)
+                .prepareGet(serverUrl)
                 .execute(
                         new WebSocketUpgradeHandler
                                 .Builder()
@@ -137,18 +140,15 @@ public class WebrtcSendRecv {
     }
 
     private CREATE_OFFER onOfferCreated = offer -> {
-        logger.info("createOffer called");
         webRTCBin.setLocalDescription(offer);
-
-        JsonNode rootNode = mapper.createObjectNode();
-        JsonNode sdpNode = mapper.createObjectNode();
-        ((ObjectNode) sdpNode).put("type", "offer");
-        ((ObjectNode) sdpNode).put("sdp", offer.getSDPMessage().toString().replace("sha-256 (null)", "sha-256 48:F5:B7:AA:35:38:E8:81:93:7B:10:F1:BE:74:8D:54:EB:8C:51:ED:4D:9B:84:D2:88:4A:EC:B7:7D:7C:2E:00"));
-        ((ObjectNode) rootNode).set("sdp", sdpNode);
-
         try {
+            JsonNode rootNode = mapper.createObjectNode();
+            JsonNode sdpNode = mapper.createObjectNode();
+            ((ObjectNode) sdpNode).put("type", "offer");
+            ((ObjectNode) sdpNode).put("sdp", offer.getSDPMessage().toString());
+            ((ObjectNode) rootNode).set("sdp", sdpNode);
             String json = mapper.writeValueAsString(rootNode);
-            logger.info(json);
+            logger.info("Sending offer:\n{}", json);
             websocket.sendTextFrame(json);
         } catch (JsonProcessingException e) {
             logger.error("Couldn't write JSON", e);

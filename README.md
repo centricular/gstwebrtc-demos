@@ -92,6 +92,12 @@ With all versions, you will see a bouncing ball + hear red noise in the browser,
 
 You can pass a --server argument to all versions, for example `--server=wss://127.0.0.1:8443`.
 
+#### Running the Java version
+
+`cd sendrecv/gst-java`\
+`./gradlew build`\
+`java -jar build/libs/gst-java.jar [session id]` with id from browser
+
 ### multiparty-sendrecv: Multiparty audio conference with N peers
 
 * Build the sources in the `gst/` directory on your machine
