@@ -58,12 +58,12 @@ public class WebrtcSendRecv {
         webRTCBin = new WebRTCBin("sendrecv");
 
         Bin video = Gst.parseBinFromDescription(VIDEO_BIN_DESCRIPTION, true);
-//        Bin audio = Gst.parseBinFromDescription(AUDIO_BIN_DESCRIPTION, true);
+        Bin audio = Gst.parseBinFromDescription(AUDIO_BIN_DESCRIPTION, true);
 
         pipe = new Pipeline();
-        pipe.addMany(webRTCBin, video);
+        pipe.addMany(webRTCBin, video, audio);
         video.link(webRTCBin);
-//        audio.link(webRTCBin);
+        audio.link(webRTCBin);
         setupPipeLogging(pipe);
 
         // When the pipeline goes to PLAYING, the on_negotiation_needed() callback will be called, and we will ask webrtcbin to create an offer which will match the pipeline above.
@@ -96,6 +96,7 @@ public class WebrtcSendRecv {
         @Override
         public void onClose(WebSocket websocket, int code, String reason) {
             logger.info("websocket onClose: " + code + " : " + reason);
+            Gst.quit();
         }
 
         @Override
@@ -189,7 +190,7 @@ public class WebrtcSendRecv {
         String name = caps.getName();
         if (name.startsWith("video")) {
             logger.info("onIncomingDecodebinStream video");
-            Element queue = ElementFactory.make("queue", "my-queue");
+            Element queue = ElementFactory.make("queue", "my-videoqueue");
             Element videoconvert = ElementFactory.make("videoconvert", "my-videoconvert");
             Element autovideosink = ElementFactory.make("autovideosink", "my-autovideosink");
             pipe.addMany(queue, videoconvert, autovideosink);
@@ -202,7 +203,7 @@ public class WebrtcSendRecv {
         }
         if (name.startsWith("audio")) {
             logger.info("onIncomingDecodebinStream audio");
-            Element queue = ElementFactory.make("queue", "my-queue");
+            Element queue = ElementFactory.make("queue", "my-audioqueue");
             Element audioconvert = ElementFactory.make("audioconvert", "my-audioconvert");
             Element audioresample = ElementFactory.make("audioresample", "my-audioresample");
             Element autoaudiosink = ElementFactory.make("autoaudiosink", "my-autoaudiosink");
@@ -223,12 +224,12 @@ public class WebrtcSendRecv {
             logger.info("Pad is not source, ignoring: {}", pad.getDirection());
             return;
         }
-        DecodeBin decodebin = new DecodeBin("my-decoder");
+        logger.info("Receiving stream! Element: {} Pad: {}", element.getName(), pad.getName());
+        DecodeBin decodebin = new DecodeBin("my-decoder-" + pad.getName());
         decodebin.connect(onIncomingDecodebinStream);
         pipe.add(decodebin);
         decodebin.syncStateWithParent();
         webRTCBin.link(decodebin);
-        logger.info("Receiving stream! Element: {} Pad: {}", element.getName(), pad.getName());
     };
 
     private void setupPipeLogging(Pipeline pipe) {
