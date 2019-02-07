@@ -7,6 +7,7 @@ import org.asynchttpclient.ws.WebSocketListener;
 import org.asynchttpclient.ws.WebSocketUpgradeHandler;
 import org.freedesktop.gstreamer.*;
 import org.freedesktop.gstreamer.Element.PAD_ADDED;
+import org.freedesktop.gstreamer.elements.DecodeBin;
 import org.freedesktop.gstreamer.elements.WebRTCBin;
 import org.freedesktop.gstreamer.elements.WebRTCBin.CREATE_OFFER;
 import org.freedesktop.gstreamer.elements.WebRTCBin.ON_ICE_CANDIDATE;
@@ -89,7 +90,7 @@ public class WebrtcSendRecv {
         @Override
         public void onOpen(WebSocket websocket) {
             logger.info("websocket onOpen");
-            websocket.sendTextFrame("HELLO 852978");
+            websocket.sendTextFrame("HELLO 564322");
         }
 
         @Override
@@ -178,9 +179,56 @@ public class WebrtcSendRecv {
         }
     };
 
+    private PAD_ADDED onIncomingDecodebinStream = (element, pad) -> {
+        logger.info("onIncomingDecodebinStream");
+        if (!pad.hasCurrentCaps()) {
+            logger.info("Pad has no caps, ignoring: {}", pad.getName());
+            return;
+        }
+        Structure caps = pad.getCaps().getStructure(0);
+        String name = caps.getName();
+        if (name.startsWith("video")) {
+            logger.info("onIncomingDecodebinStream video");
+            Element queue = ElementFactory.make("queue", "my-queue");
+            Element videoconvert = ElementFactory.make("videoconvert", "my-videoconvert");
+            Element autovideosink = ElementFactory.make("autovideosink", "my-autovideosink");
+            pipe.addMany(queue, videoconvert, autovideosink);
+            queue.syncStateWithParent();
+            videoconvert.syncStateWithParent();
+            autovideosink.syncStateWithParent();
+            pad.link(queue.getStaticPad("sink"));
+            queue.link(videoconvert);
+            videoconvert.link(autovideosink);
+        }
+        if (name.startsWith("audio")) {
+            logger.info("onIncomingDecodebinStream audio");
+            Element queue = ElementFactory.make("queue", "my-queue");
+            Element audioconvert = ElementFactory.make("audioconvert", "my-audioconvert");
+            Element audioresample = ElementFactory.make("audioresample", "my-audioresample");
+            Element autoaudiosink = ElementFactory.make("autoaudiosink", "my-autoaudiosink");
+            pipe.addMany(queue, audioconvert, audioresample, autoaudiosink);
+            queue.syncStateWithParent();
+            audioconvert.syncStateWithParent();
+            audioresample.syncStateWithParent();
+            autoaudiosink.syncStateWithParent();
+            pad.link(queue.getStaticPad("sink"));
+            queue.link(audioconvert);
+            audioconvert.link(audioresample);
+            audioresample.link(autoaudiosink);
+        }
+    };
+
     private PAD_ADDED onIncomingStream = (element, pad) -> {
+        if (pad.getDirection() != PadDirection.SRC) {
+            logger.info("Pad is not source, ignoring: {}", pad.getDirection());
+            return;
+        }
+        DecodeBin decodebin = new DecodeBin("my-decoder");
+        decodebin.connect(onIncomingDecodebinStream);
+        pipe.add(decodebin);
+        decodebin.syncStateWithParent();
+        webRTCBin.link(decodebin);
         logger.info("Receiving stream! Element: {} Pad: {}", element.getName(), pad.getName());
-        // TODO: Send stream to autovideosink and autoaudiosink
     };
 
     private void setupPipeLogging(Pipeline pipe) {
