@@ -96,7 +96,11 @@ You can pass a --server argument to all versions, for example `--server=wss://12
 
 `cd sendrecv/gst-java`\
 `./gradlew build`\
-`java -jar build/libs/gst-java.jar [session id]` with id from browser
+`java -jar build/libs/gst-java.jar --peer-id=ID` with the `id` from the browser.
+
+You can optionally specify the server URL too (it defaults to wss://webrtc.nirbheek.in:8443):
+
+`java -jar build/libs/gst-java.jar --peer-id=1 --server=ws://localhost:8443`
 
 ### multiparty-sendrecv: Multiparty audio conference with N peers
 

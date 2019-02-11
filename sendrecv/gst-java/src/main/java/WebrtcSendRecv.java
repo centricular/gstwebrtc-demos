@@ -2,6 +2,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.asynchttpclient.DefaultAsyncHttpClient;
+import org.asynchttpclient.DefaultAsyncHttpClientConfig;
 import org.asynchttpclient.ws.WebSocket;
 import org.asynchttpclient.ws.WebSocketListener;
 import org.asynchttpclient.ws.WebSocketUpgradeHandler;
@@ -80,7 +82,13 @@ public class WebrtcSendRecv {
     }
 
     private void startCall() throws Exception {
-        websocket = asyncHttpClient()
+        DefaultAsyncHttpClientConfig httpClientConfig =
+                new DefaultAsyncHttpClientConfig
+                        .Builder()
+                        .setUseInsecureTrustManager(true)
+                        .build();
+
+        websocket = new DefaultAsyncHttpClient(httpClientConfig)
                 .prepareGet(serverUrl)
                 .execute(
                         new WebSocketUpgradeHandler
