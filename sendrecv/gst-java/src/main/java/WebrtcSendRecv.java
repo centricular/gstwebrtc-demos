@@ -19,8 +19,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 
-import static org.asynchttpclient.Dsl.asyncHttpClient;
-
 /**
  * Demo gstreamer app for negotiating and streaming a sendrecv webrtc stream
  * with a browser JS app.
