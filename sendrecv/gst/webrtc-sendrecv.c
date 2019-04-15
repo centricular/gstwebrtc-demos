@@ -66,15 +66,18 @@ cleanup_and_quit_loop (const gchar * msg, enum AppState state)
 
   if (ws_conn) {
     if (soup_websocket_connection_get_state (ws_conn) ==
-        SOUP_WEBSOCKET_STATE_OPEN)
+        SOUP_WEBSOCKET_STATE_OPEN) {
       /* This will call us again */
       soup_websocket_connection_close (ws_conn, 1000, "");
-    else
+    } else {
       g_object_unref (ws_conn);
+      ws_conn = NULL;
+    }
   }
 
   if (loop) {
     g_main_loop_quit (loop);
+    g_main_loop_unref (loop);
     loop = NULL;
   }
 
@@ -712,7 +715,11 @@ main (int argc, char *argv[])
   connect_to_websocket_server_async ();
 
   g_main_loop_run (loop);
-  g_main_loop_unref (loop);
+
+  /* Check if loop has already been cleaned up */
+  if (loop) {
+    g_main_loop_unref (loop);
+  }
 
   if (pipe1) {
     gst_element_set_state (GST_ELEMENT (pipe1), GST_STATE_NULL);
