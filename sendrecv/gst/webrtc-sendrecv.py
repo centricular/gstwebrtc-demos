@@ -71,14 +71,14 @@ class WebRTCClient:
             return
 
         caps = pad.get_current_caps()
-        assert (len(caps))
-        s = caps[0]
-        name = s.get_name()
+        name = caps.to_string()
         if name.startswith('video'):
             q = Gst.ElementFactory.make('queue')
             conv = Gst.ElementFactory.make('videoconvert')
             sink = Gst.ElementFactory.make('autovideosink')
-            self.pipe.add(q, conv, sink)
+            self.pipe.add(q)
+            self.pipe.add(conv)
+            self.pipe.add(sink)
             self.pipe.sync_children_states()
             pad.link(q.get_static_pad('sink'))
             q.link(conv)
@@ -88,7 +88,10 @@ class WebRTCClient:
             conv = Gst.ElementFactory.make('audioconvert')
             resample = Gst.ElementFactory.make('audioresample')
             sink = Gst.ElementFactory.make('autoaudiosink')
-            self.pipe.add(q, conv, resample, sink)
+            self.pipe.add(q)
+            self.pipe.add(conv)
+            self.pipe.add(resample)
+            self.pipe.add(sink)
             self.pipe.sync_children_states()
             pad.link(q.get_static_pad('sink'))
             q.link(conv)
