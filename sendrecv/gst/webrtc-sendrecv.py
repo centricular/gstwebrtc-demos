@@ -50,7 +50,7 @@ class WebRTCClient:
     def on_offer_created(self, promise, _, __):
         promise.wait()
         reply = promise.get_reply()
-        offer = reply['offer']
+        offer = reply.get_value('offer')
         promise = Gst.Promise.new()
         self.webrtc.emit('set-local-description', offer, promise)
         promise.interrupt()
