@@ -27,19 +27,17 @@ struct webrtc_mp_s {
     size_t             bin_count;
 };
 
-webrtc_mp_t* webrtc_mp_create         (camera_pipe_t* pipeline);
-void             webrtc_mp_delete         (webrtc_mp_t* mountpoint);
+webrtc_mp_t* webrtc_mp_create(camera_pipe_t* pipeline);
+void         webrtc_mp_delete(webrtc_mp_t* mountpoint);
 
-gboolean         webrtc_mp_add_element    (webrtc_mp_t*      mountpoint,
-                                               webrtc_session_t* session);
-GstElement*      webrtc_mp_get_element    (webrtc_mp_t* mountpoint,
-                                               guint            client_uid);
-gboolean         webrtc_mp_remove_element (webrtc_mp_t* mountpoint,
-                                               guint            client_uid);
-gboolean         webrtc_mp_reset_jointimes(webrtc_mp_t* mountpoint);
-
-webrtc_session_t* webrtc_mp_get_session(webrtc_mp_t* mountpoint,
-                                                guint            client_uid);
+gboolean         webrtc_mp_add_element   (webrtc_mp_t*      mountpoint,
+                                          webrtc_session_t* session);
+GstElement*      webrtc_mp_get_element   (webrtc_mp_t* mountpoint,
+                                          guint        client_uid);
+gboolean         webrtc_mp_remove_element(webrtc_mp_t* mountpoint,
+                                          guint        client_uid);
+webrtc_session_t* webrtc_mp_get_session  (webrtc_mp_t* mountpoint,
+                                          guint        client_uid);
 
 gchar* get_string_from_json_object(JsonObject* object);
 

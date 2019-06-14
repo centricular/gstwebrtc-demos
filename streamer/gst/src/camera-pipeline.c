@@ -117,7 +117,6 @@ void camera_pipe_delete(camera_pipe_t* data)
 }
 
 
-
 gboolean camera_pipe_set_state(camera_pipe_t* data, GstState state)
 {
     /* Start playing the pipeline */
@@ -137,7 +136,6 @@ gboolean camera_pipe_set_state(camera_pipe_t* data, GstState state)
     }
     return TRUE;
 }
-
 
 
 static gboolean set_properties(camera_pipe_t *data)

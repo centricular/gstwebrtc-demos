@@ -374,10 +374,32 @@ gboolean webrtc_mp_add_element(
         return FALSE;
     }
 
+    GstState* pipeline_state = NULL;
+    GstStateChangeReturn ret;
+
+    ret = gst_element_get_state(mountpoint->pipeline_ref->pipeline,
+        pipeline_state, NULL, GST_CLOCK_TIME_NONE);
+
+    if (ret != GST_STATE_CHANGE_SUCCESS) {
+        g_printerr("ERROR: unable to get pipeline state (%d).\n", ret);
+        return FALSE;
+    }
+
+    /* set state of new webrtcbin element to match pipeline */
     if (mountpoint->pipeline_ref->playing) {
         /* set state of new webrtcbin element to playing */
         GstStateChangeReturn ret = gst_element_set_state(
             webrtcbin, GST_STATE_PLAYING);
+        if (ret == GST_STATE_CHANGE_FAILURE) {
+            // gst_object_unref(webrtcbin);
+            g_printerr(
+                "ERROR: Unable to set the webrtcbin_%u to playing state.\n",
+                session->client_uid);
+            return FALSE;
+        }
+    }
+    else {
+        ret = gst_element_set_state(webrtcbin, GST_STATE_READY);
         if (ret == GST_STATE_CHANGE_FAILURE) {
             // gst_object_unref(webrtcbin);
             g_printerr(
@@ -400,8 +422,8 @@ gboolean webrtc_mp_add_element(
     }
 
     /* Link new webrtcbin to webrtc_tee */
-    GstPadLinkReturn ret = gst_pad_link(new_tee_pad, webrtcbin_pad);
-    if (ret != GST_PAD_LINK_OK) {
+    GstPadLinkReturn pad_ret = gst_pad_link(new_tee_pad, webrtcbin_pad);
+    if (pad_ret != GST_PAD_LINK_OK) {
         gst_object_unref(new_tee_pad);
         gst_object_unref(webrtcbin_pad);
         g_printerr("ERROR: Unable to link to new webrtcbin_%u: "
@@ -517,24 +539,6 @@ gboolean webrtc_mp_remove_element(
     }
 
     return TRUE;
-}
-
-
-gboolean webrtc_mp_reset_jointimes(webrtc_mp_t* mountpoint)
-{
-    if (!mountpoint) {
-        return FALSE;
-    }
-    gboolean no_issues = TRUE;
-    for (size_t i = 0; i < mountpoint->bin_count; i++) {
-        if (!mountpoint->session_refs[i]) {
-            no_issues = FALSE;
-            g_printerr("ERROR: Non-existent session for mp element %lu\n", i);
-            continue;
-        }
-        mountpoint->session_refs[i]->join_time = 0;
-    }
-    return no_issues;
 }
 
 
