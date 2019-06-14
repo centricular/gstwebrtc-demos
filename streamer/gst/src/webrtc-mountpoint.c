@@ -81,7 +81,6 @@ static void send_sdp_offer(
     }
 
     text = gst_sdp_message_as_text(offer->sdp);
-    g_print("Sending offer:\n%s\n", text);
 
     sdp = json_object_new        ();
     json_object_set_string_member(sdp, "type", "offer");
@@ -152,72 +151,6 @@ static void on_negotiation_needed(
     promise = gst_promise_new_with_change_func(
         on_offer_created, userdata, NULL);
     g_signal_emit_by_name(webrtcbin, "create-offer", NULL, promise);
-}
-
-
-static void data_channel_on_error(GObject* dc, void* userdata)
-{
-    UNUSED(dc);
-    UNUSED(userdata);
-    g_printerr("Data channel error\n");
-}
-
-
-static void data_channel_on_open(GObject* dc, void* userdata)
-{
-    UNUSED(dc);
-    UNUSED(userdata);
-    GBytes *bytes = g_bytes_new ("data", strlen("data"));
-    g_print ("data channel opened\n");
-    g_signal_emit_by_name (dc, "send-string", "Hi! from GStreamer");
-    g_signal_emit_by_name (dc, "send-data", bytes);
-    g_bytes_unref (bytes);
-}
-
-
-static void data_channel_on_close(GObject* dc, void* userdata)
-{
-    UNUSED(dc);
-    UNUSED(userdata);
-    g_printerr("Data channel closed\n");
-}
-
-
-static void data_channel_on_message_string(
-    GObject* dc,
-    gchar*   str,
-    void*    userdata)
-{
-    UNUSED(dc);
-    UNUSED(userdata);
-    g_print ("Received data channel message: %s\n", str);
-}
-
-
-static void connect_data_channel_signals(
-    GObject* data_channel,
-    void*    userdata)
-{
-    g_signal_connect(data_channel, "on-error",
-                     G_CALLBACK (data_channel_on_error), userdata);
-    g_signal_connect(data_channel, "on-open",
-                     G_CALLBACK (data_channel_on_open), userdata);
-    g_signal_connect(data_channel, "on-close",
-                     G_CALLBACK (data_channel_on_close), userdata);
-    g_signal_connect(data_channel, "on-message-string",
-                     G_CALLBACK (data_channel_on_message_string), userdata);
-}
-
-
-static void on_data_channel(
-    GstElement* webrtc,
-    GObject*    data_channel,
-    void*       userdata)
-{
-    UNUSED(webrtc);
-    webrtc_session_t* session = (webrtc_session_t*)userdata;
-    connect_data_channel_signals(data_channel, userdata);
-    session->receive_channel = data_channel;
 }
 
 
@@ -316,97 +249,17 @@ gboolean webrtc_mp_add_element(
             return FALSE;
         }
     }
+
     /* Create webrtcbin element and link to webrtc_tee */
     name      = g_strdup_printf("webrtcbin_%u", session->client_uid);
     webrtcbin = gst_element_factory_make("webrtcbin", name);
     g_free(name);
-
-    if (!webrtcbin) {
-        g_printerr("ERROR: Unable to create webrtcbin_%u\n",
-                   session->client_uid);
-        return FALSE;
-    }
-    /* Add reference to session */
-    session->webrtcbin_ref = webrtcbin;
-
-    /* This is the gstwebrtc entry point where we create the offer and so on. It
-     * will be called when the pipeline goes to PLAYING. */
-    g_signal_connect(webrtcbin, "on-negotiation-needed",
-        G_CALLBACK (on_negotiation_needed), (void*)session);
-    /* We need to transmit this ICE candidate to the browser via the websockets
-     * signalling server. Incoming ice candidates from the browser need to be
-     * added by us too, see on_server_message() */
-    g_signal_connect(webrtcbin, "on-ice-candidate",
-        G_CALLBACK (send_ice_candidate_message), (void*)session);
-
-    g_signal_emit_by_name(webrtcbin, "create-data-channel", "channel", NULL,
-        &session->send_channel);
-    if (session->send_channel) {
-        g_print                     ("Created data channel\n");
-        // TODO: undelete me for newer gstreamer version
-        // connect_data_channel_signals(session->send_channel, (void*)session);
-    } else {
-        g_printerr(
-            "WARNING: Could not create data channel, is usrsctp available?\n");
-    }
-
-    // TODO: undelete me for newer gstreamer version
-    g_signal_connect(webrtcbin, "on-data-channel", G_CALLBACK (on_data_channel),
-        (void*)session);
-
-    /* Set properties */
-    g_object_set(webrtcbin, "stun-server", STUN_SERVER, NULL);
-    // NB: only works in newer gstreamer
-    g_object_set(webrtcbin, "bundle-policy", 3, NULL);
-
-    /* The order should be:
-     * - add new elements to pipeline
-     * - link new elements (but not yet to tee)
-     * - set state of elements to PLAYING (assuming the pipeline is in
-     * PLAYING), going from sink towards the queue.
-     * - lastly, link the queue to the tee.
-     */
 
     if (!gst_bin_add(GST_BIN(mountpoint->pipeline_ref->pipeline), webrtcbin)) {
         g_printerr("ERROR: Adding webrtcbin_%u to pipeline\n",
                    session->client_uid);
         gst_object_unref(webrtcbin);
         return FALSE;
-    }
-
-    GstState* pipeline_state = NULL;
-    GstStateChangeReturn ret;
-
-    ret = gst_element_get_state(mountpoint->pipeline_ref->pipeline,
-        pipeline_state, NULL, GST_CLOCK_TIME_NONE);
-
-    if (ret != GST_STATE_CHANGE_SUCCESS) {
-        g_printerr("ERROR: unable to get pipeline state (%d).\n", ret);
-        return FALSE;
-    }
-
-    /* set state of new webrtcbin element to match pipeline */
-    if (mountpoint->pipeline_ref->playing) {
-        /* set state of new webrtcbin element to playing */
-        GstStateChangeReturn ret = gst_element_set_state(
-            webrtcbin, GST_STATE_PLAYING);
-        if (ret == GST_STATE_CHANGE_FAILURE) {
-            // gst_object_unref(webrtcbin);
-            g_printerr(
-                "ERROR: Unable to set the webrtcbin_%u to playing state.\n",
-                session->client_uid);
-            return FALSE;
-        }
-    }
-    else {
-        ret = gst_element_set_state(webrtcbin, GST_STATE_READY);
-        if (ret == GST_STATE_CHANGE_FAILURE) {
-            // gst_object_unref(webrtcbin);
-            g_printerr(
-                "ERROR: Unable to set the webrtcbin_%u to playing state.\n",
-                session->client_uid);
-            return FALSE;
-        }
     }
 
     /* Get pads for linking */
@@ -428,10 +281,50 @@ gboolean webrtc_mp_add_element(
         gst_object_unref(webrtcbin_pad);
         g_printerr("ERROR: Unable to link to new webrtcbin_%u: "
                    "GstPadLinkReturn: %d\n",
-                   session->client_uid, ret);
+                   session->client_uid, pad_ret);
         gst_debug_set_threshold_from_string ("*:2", TRUE);
         return FALSE;
     }
+
+    GstStateChangeReturn ret;
+
+    /* set state of pipeline to READY */
+    ret = gst_element_set_state(
+        mountpoint->pipeline_ref->pipeline, GST_STATE_READY);
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+        // gst_object_unref(webrtcbin);
+        g_printerr("ERROR: Unable to set the pipeline to READY state.\n");
+        return FALSE;
+    }
+
+    if (!webrtcbin) {
+        g_printerr("ERROR: Unable to create webrtcbin_%u\n",
+                   session->client_uid);
+        return FALSE;
+    }
+    /* Add reference to session */
+    session->webrtcbin_ref = webrtcbin;
+
+    /* This is the gstwebrtc entry point where we create the offer and so on. It
+     * will be called when the pipeline goes to PLAYING. */
+    g_signal_connect(webrtcbin, "on-negotiation-needed",
+        G_CALLBACK (on_negotiation_needed), (void*)session);
+    /* We need to transmit this ICE candidate to the browser via the websockets
+     * signalling server. Incoming ice candidates from the browser need to be
+     * added by us too, see on_server_message() */
+    g_signal_connect(webrtcbin, "on-ice-candidate",
+        G_CALLBACK (send_ice_candidate_message), (void*)session);
+
+    /* Set properties */
+    g_object_set(webrtcbin, "stun-server", STUN_SERVER, NULL);
+
+    /* The order should be:
+     * - add new elements to pipeline
+     * - link new elements (but not yet to tee)
+     * - set state of elements to PLAYING (assuming the pipeline is in
+     * PLAYING), going from sink towards the queue.
+     * - lastly, link the queue to the tee.
+     */
 
     /* Update mountpoint with new element and session ref */
     mountpoint->bin_count++;
@@ -444,6 +337,15 @@ gboolean webrtc_mp_add_element(
     mountpoint->session_refs[mountpoint->bin_count - 1] = session;
     mountpoint->tee_pads    [mountpoint->bin_count - 1] = new_tee_pad;
     mountpoint->bin_pads    [mountpoint->bin_count - 1] = webrtcbin_pad;
+
+    /* set state of pipeline to PLAYING */
+    ret = gst_element_set_state(
+        mountpoint->pipeline_ref->pipeline, GST_STATE_PLAYING);
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+        // gst_object_unref(webrtcbin);
+        g_printerr("ERROR: Unable to set the pipeline to PLAYING state.\n");
+        return FALSE;
+    }
 
     return TRUE;
 }
@@ -501,7 +403,7 @@ gboolean webrtc_mp_remove_element(
     /* Set state to NULL*/
     GstStateChangeReturn ret = gst_element_set_state(
         mountpoint->webrtcbins[index], GST_STATE_NULL);
-    g_print("return: %d\n", ret);
+
     if (ret == GST_STATE_CHANGE_FAILURE) {
         // gst_object_unref(webrtcbin);
         g_printerr(
