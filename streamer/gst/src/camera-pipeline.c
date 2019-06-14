@@ -46,6 +46,7 @@ camera_pipe_t* camera_pipe_create()
 
     data->webrtc_queue = gst_element_factory_make("queue", "webrtc_queue");
     data->webrtc_tee   = gst_element_factory_make("tee", "webrtc_tee");
+    data->fakesink     = gst_element_factory_make("fakesink", "fakesink");
 
 
     data->webrtc_mp     = webrtc_mp_create(data);
@@ -65,7 +66,7 @@ camera_pipe_t* camera_pipe_create()
 
     if (!data->pipeline || !data->video_testsrc || !data->video_convert ||
         !data->queue || !data->video_encoder || !data->rtp_payloader ||
-        !data->webrtc_queue || !data->webrtc_tee ||
+        !data->webrtc_queue || !data->webrtc_tee || !data->fakesink ||
         !data->encode_caps_filter || !data->source_caps_filter) {
         // TODO: add error goto
         g_print("Not all elements could be created!\n");
@@ -84,7 +85,8 @@ camera_pipe_t* camera_pipe_create()
                      data->source_caps_filter, data->video_convert,
                      data->queue, data->video_encoder,
                      data->encode_caps_filter, data->rtp_payloader,
-                     data->webrtc_queue, data->webrtc_tee, NULL);
+                     data->webrtc_queue, data->webrtc_tee, data->fakesink,
+                     NULL);
 
 
     /* link elements */
@@ -93,7 +95,7 @@ camera_pipe_t* camera_pipe_create()
                                data->video_convert, data->queue,
                                data->video_encoder, data->encode_caps_filter,
                                data->rtp_payloader, data->webrtc_queue,
-                               data->webrtc_tee, NULL)) {
+                               data->webrtc_tee, data->fakesink, NULL)) {
         GST_ERROR("Elements could not be linked!\n");
         camera_pipe_delete(data);
         return NULL;

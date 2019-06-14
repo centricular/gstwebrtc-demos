@@ -25,6 +25,8 @@ struct camera_pipe_s {
     GstElement *rtp_payloader;
     GstElement *webrtc_queue, *webrtc_tee;
 
+    GstElement *fakesink;
+
     webrtc_mp_t *webrtc_mp;
 
     GstElement *source_caps_filter, *encode_caps_filter;
