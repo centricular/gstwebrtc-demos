@@ -250,10 +250,16 @@ gboolean webrtc_mp_add_element(
         }
     }
 
-    /* Create webrtcbin element and link to webrtc_tee */
+    /* Create webrtcbin element */
     name      = g_strdup_printf("webrtcbin_%u", session->client_uid);
     webrtcbin = gst_element_factory_make("webrtcbin", name);
     g_free(name);
+
+    if (!webrtcbin) {
+        g_printerr("ERROR: Unable to create webrtcbin_%u\n",
+                   session->client_uid);
+        return FALSE;
+    }
 
     if (!gst_bin_add(GST_BIN(mountpoint->pipeline_ref->pipeline), webrtcbin)) {
         g_printerr("ERROR: Adding webrtcbin_%u to pipeline\n",
@@ -287,21 +293,33 @@ gboolean webrtc_mp_add_element(
     }
 
     GstStateChangeReturn ret;
+    GstState             webrtc_target_state;
 
-    /* set state of pipeline to READY */
+    if (mountpoint->pipeline_ref->playing) {
+        webrtc_target_state = GST_STATE_PLAYING;
+    }
+    else {
+        webrtc_target_state = GST_STATE_READY;
+        /* set state of pipeline to READY */
+        ret = gst_element_set_state(
+            mountpoint->pipeline_ref->pipeline, GST_STATE_READY);
+        if (ret == GST_STATE_CHANGE_FAILURE) {
+            // gst_object_unref(webrtcbin);
+            g_printerr("ERROR: Unable to set the pipeline to READY state.\n");
+            return FALSE;
+        }
+    }
+    /* set state of new webrtcbin element to match pipeline */
     ret = gst_element_set_state(
-        mountpoint->pipeline_ref->pipeline, GST_STATE_READY);
+        webrtcbin, webrtc_target_state);
     if (ret == GST_STATE_CHANGE_FAILURE) {
         // gst_object_unref(webrtcbin);
-        g_printerr("ERROR: Unable to set the pipeline to READY state.\n");
+        g_printerr(
+            "ERROR: Unable to set the webrtcbin_%u to playing state.\n",
+            session->client_uid);
         return FALSE;
     }
 
-    if (!webrtcbin) {
-        g_printerr("ERROR: Unable to create webrtcbin_%u\n",
-                   session->client_uid);
-        return FALSE;
-    }
     /* Add reference to session */
     session->webrtcbin_ref = webrtcbin;
 
