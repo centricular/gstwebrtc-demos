@@ -1,8 +1,8 @@
 FROM maxmcd/gstreamer:1.14-buster
 
+RUN apt-get update --allow-releaseinfo-change
+RUN apt-get update --fix-missing
 RUN apt-get install -y libjson-glib-dev
-# RUN apk update
-# RUN apk add json-glib-dev libsoup-dev
 
 WORKDIR /opt/
 COPY . /opt/
