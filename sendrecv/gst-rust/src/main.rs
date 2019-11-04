@@ -9,7 +9,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use tokio::prelude::*;
 use tokio::sync::mpsc;
-use websocket::message::OwnedMessage;
+use websocket_hyper::OwnedMessage;
 
 use gst::gst_element_error;
 use gst::prelude::*;
@@ -82,7 +82,7 @@ struct AppInner {
 // Various error types for the different errors that can happen here
 #[derive(Debug, Fail)]
 #[fail(display = "WebSocket error: {:?}", _0)]
-struct WebSocketError(websocket::WebSocketError);
+struct WebSocketError(websocket_hyper::WebSocketError);
 
 #[derive(Debug, Fail)]
 #[fail(display = "GStreamer error: {:?}", _0)]
@@ -146,10 +146,9 @@ impl App {
             .unwrap()
             .try_send(OwnedMessage::Text(msg))
             .map_err(|_| {
-                WebSocketError(websocket::WebSocketError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "Connection Closed",
-                )))
+                WebSocketError(websocket_hyper::WebSocketError::IoError(
+                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Connection Closed"),
+                ))
                 .into()
             })
     }
@@ -774,6 +773,78 @@ fn check_plugins() -> Result<(), Error> {
     }
 }
 
+async fn run(server: String, peer_id: Option<String>, rtx: bool) -> Result<(), Error> {
+    let (ws_r, ws_w) = websocket_hyper::client::connect(&server).await?;
+    println!("connected");
+
+    // Create basic pipeline
+    let pipeline = gst::Pipeline::new(Some("main"));
+    let webrtcbin = gst::ElementFactory::make("webrtcbin", None).unwrap();
+    pipeline.add(&webrtcbin).unwrap();
+
+    webrtcbin.set_property_from_str("stun-server", STUN_SERVER);
+    webrtcbin.set_property_from_str("bundle-policy", "max-bundle");
+
+    let bus = pipeline.get_bus().unwrap();
+
+    // Send our bus messages via a futures channel to be handled asynchronously
+    let (send_gst_msg_tx, send_gst_msg_rx) = mpsc::unbounded_channel::<gst::Message>();
+    let send_gst_msg_tx = Mutex::new(send_gst_msg_tx);
+    bus.set_sync_handler(move |_, msg| {
+        let _ = send_gst_msg_tx.lock().unwrap().try_send(msg.clone());
+        gst::BusSyncReply::Drop
+    });
+
+    // Create our application control logic
+    let (send_ws_msg_tx, send_ws_msg_rx) = mpsc::unbounded_channel::<OwnedMessage>();
+    let app = App(Arc::new(AppInner {
+        peer_id,
+        pipeline,
+        webrtcbin,
+        send_msg_tx: Mutex::new(send_ws_msg_tx),
+        rtx,
+    }));
+
+    // Start registration process with the server. This will insert a
+    // message into the send_ws_msg channel that will then be sent later
+    app.register_with_server();
+
+    // Fuse all the streams and make them mutable so we can select over them
+    let mut ws_r = ws_r.fuse();
+    let mut send_gst_msg_rx = send_gst_msg_rx.fuse();
+    let mut send_ws_msg_rx = send_ws_msg_rx.fuse();
+
+    let mut ws_w = ws_w;
+
+    // And now handle all messages from our streams
+    loop {
+        let ws_msg = futures::select! {
+            // Pass the WebSocket messages to our application control logic
+            // and convert them into potential messages to send out
+            ws_msg = ws_r.select_next_some() => {
+                app.handle_websocket_message(ws_msg?)?
+            },
+            // Pass the GStreamer messages to the application control logic
+            // and convert them into potential messages to send out
+            gst_msg = send_gst_msg_rx.select_next_some() => {
+                app.handle_pipeline_message(&gst_msg)?
+            },
+            // Handle WebSocket messages we created asynchronously
+            // to send them out now
+            ws_msg = send_ws_msg_rx.select_next_some() => Some(ws_msg),
+            // Once we're done, break the loop and return
+            complete => break,
+        };
+
+        // If there's a message to send out, do so now
+        if let Some(ws_msg) = ws_msg {
+            ws_w.send(ws_msg).await?;
+        }
+    }
+
+    Ok(())
+}
+
 fn main() {
     gst::init().unwrap();
     if let Err(err) = check_plugins() {
@@ -783,86 +854,14 @@ fn main() {
 
     let (server, peer_id, rtx) = parse_args();
 
-    let mut runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
 
     println!("Connecting to server {}", server);
-    let res = runtime.block_on(
-        websocket::client::ClientBuilder::new(&server)
-            .unwrap()
-            .async_connect(None)
-            .map_err(|err| Error::from(WebSocketError(err)))
-            .and_then(move |(stream, _)| {
-                println!("connected");
 
-                // Create basic pipeline
-                let pipeline = gst::Pipeline::new(Some("main"));
-                let webrtcbin = gst::ElementFactory::make("webrtcbin", None).unwrap();
-                pipeline.add(&webrtcbin).unwrap();
-
-                webrtcbin.set_property_from_str("stun-server", STUN_SERVER);
-                webrtcbin.set_property_from_str("bundle-policy", "max-bundle");
-
-                let bus = pipeline.get_bus().unwrap();
-
-                // Send our bus messages via a futures channel to be handled asynchronously
-                let (send_gst_msg_tx, send_gst_msg_rx) = mpsc::unbounded_channel::<gst::Message>();
-                let send_gst_msg_tx = Mutex::new(send_gst_msg_tx);
-                bus.set_sync_handler(move |_, msg| {
-                    let _ = send_gst_msg_tx.lock().unwrap().try_send(msg.clone());
-                    gst::BusSyncReply::Drop
-                });
-
-                // Create our application control logic
-                let (send_ws_msg_tx, send_ws_msg_rx) = mpsc::unbounded_channel::<OwnedMessage>();
-                let app = App(Arc::new(AppInner {
-                    peer_id,
-                    pipeline,
-                    webrtcbin,
-                    send_msg_tx: Mutex::new(send_ws_msg_tx),
-                    rtx,
-                }));
-
-                // Start registration process with the server. This will insert a
-                // message into the send_ws_msg channel that will then be sent later
-                app.register_with_server();
-
-                // Split the stream into the receive part (stream) and send part (sink)
-                let (sink, stream) = stream.split();
-
-                // Pass the WebSocket messages to our application control logic
-                // and convert them into potential messages to send out
-                let app_clone = app.clone();
-                let ws_messages = stream
-                    .map_err(|err| Error::from(WebSocketError(err)))
-                    .and_then(move |msg| app_clone.handle_websocket_message(msg))
-                    .filter_map(|msg| msg);
-
-                // Pass the GStreamer messages to the application control logic
-                // and convert them into potential messages to send out
-                let app_clone = app.clone();
-                let gst_messages = send_gst_msg_rx
-                    .map_err(Error::from)
-                    .and_then(move |msg| app_clone.handle_pipeline_message(&msg))
-                    .filter_map(|msg| msg);
-
-                // Merge the two outgoing message streams
-                let sync_outgoing_messages = gst_messages.select(ws_messages);
-
-                // And here collect all the asynchronous outgoing messages that come
-                // from other threads
-                let async_outgoing_messages = send_ws_msg_rx.map_err(Error::from);
-
-                // Merge both outgoing messages streams and send them out directly
-                sink.sink_map_err(|err| Error::from(WebSocketError(err)))
-                    .send_all(sync_outgoing_messages.select(async_outgoing_messages))
-                    .map(|_| ())
-            }),
-    );
-
-    if let Err(err) = res {
+    if let Err(err) = runtime.block_on(run(server, peer_id, rtx)) {
         println!("Error: {:?}", err);
     }
 
     // And now shut down the runtime
-    runtime.shutdown_now().wait().unwrap();
+    runtime.shutdown_now();
 }

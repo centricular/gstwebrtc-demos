@@ -16,5 +16,6 @@ rand = "0.7"
 serde = "1.0.66"
 serde_derive = "1.0.66"
 serde_json = "1.0.19"
-websocket = "0.23"
-tokio = "0.1"
+websocket-hyper = { git = "https://github.com/sdroege/rust-websocket.git", rev = "tokio-0.2" }
+futures-preview = { version = "0.3.0-alpha.19", features = ["async-await"] }
+tokio = { version = "0.2.0-alpha.6" }
