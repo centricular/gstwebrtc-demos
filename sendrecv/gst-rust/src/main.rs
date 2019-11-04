@@ -778,7 +778,7 @@ fn check_plugins() -> Result<(), Error> {
         .collect::<Vec<_>>();
 
     if !missing.is_empty() {
-        Err(MissingElements(missing))?
+        return Err(MissingElements(missing).into());
     } else {
         Ok(())
     }
