@@ -1,28 +1,18 @@
-extern crate clap;
-#[macro_use]
-extern crate failure;
-extern crate glib;
-#[macro_use]
-extern crate gstreamer as gst;
-extern crate gstreamer_sdp as gst_sdp;
-extern crate gstreamer_webrtc as gst_webrtc;
-extern crate rand;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-extern crate tokio;
-extern crate websocket;
-#[macro_use]
-extern crate lazy_static;
-
-use failure::Error;
-use gst::prelude::*;
-use rand::Rng;
 use std::sync::{Arc, Mutex, Weak};
+
+use failure::{Error, Fail};
+
+use lazy_static::lazy_static;
+use rand::Rng;
+
+use serde_derive::{Deserialize, Serialize};
+
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 use websocket::message::OwnedMessage;
+
+use gst::gst_element_error;
+use gst::prelude::*;
 
 const STUN_SERVER: &str = "stun://stun.l.google.com:19302";
 

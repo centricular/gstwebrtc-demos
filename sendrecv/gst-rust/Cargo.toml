@@ -1,15 +1,16 @@
 [package]
 name = "gst-rust"
 version = "0.1.0"
-authors = ["maxmcd <max.t.mcdonnell@gmail.com>"]
+authors = ["maxmcd <max.t.mcdonnell@gmail.com>", "Sebastian Dröge <sebastian@centricular.com>"]
+edition = "2018"
 
 [dependencies]
 clap = "2.31.2"
 failure = "0.1.1"
 glib = "0.8"
-gstreamer = "0.14"
-gstreamer-sdp = "0.14"
-gstreamer-webrtc = "0.14"
+gst = { package = "gstreamer", version = "0.14" }
+gst-webrtc = { package = "gstreamer-webrtc", version = "0.14" }
+gst-sdp = { package = "gstreamer-sdp", version = "0.14" }
 lazy_static = "1.0"
 rand = "0.7"
 serde = "1.0.66"
