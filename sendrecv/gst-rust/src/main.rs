@@ -60,6 +60,15 @@ enum MediaType {
     Video,
 }
 
+// The command-line arguments
+#[derive(Debug)]
+struct Args {
+    server: String,
+    // None if we wait for a peer to appear
+    peer_id: Option<String>,
+    rtx: bool,
+}
+
 // Strong reference to our application state
 #[derive(Debug, Clone)]
 struct App(Arc<AppInner>);
@@ -71,12 +80,10 @@ struct AppWeak(Weak<AppInner>);
 // Actual application state
 #[derive(Debug)]
 struct AppInner {
-    // None if we wait for a peer to appear
-    peer_id: Option<String>,
+    args: Args,
     pipeline: gst::Pipeline,
     webrtcbin: gst::Element,
     send_msg_tx: Mutex<mpsc::UnboundedSender<OwnedMessage>>,
-    rtx: bool,
 }
 
 // Various error types for the different errors that can happen here
@@ -446,7 +453,7 @@ impl App {
 
         // Whenever (re-)negotiation is needed, do so but this is only needed if
         // we send the initial offer
-        if self.0.peer_id.is_some() {
+        if self.0.args.peer_id.is_some() {
             let app_clone = self.downgrade();
             self.0
                 .webrtcbin
@@ -498,7 +505,7 @@ impl App {
         self.add_audio_source()?;
 
         // Enable RTX only for video, Chrome etc al fail SDP negotiation otherwise
-        if self.0.rtx {
+        if self.0.args.rtx {
             let transceiver = self
                 .0
                 .webrtcbin
@@ -521,7 +528,7 @@ impl App {
 
     // Once we got the HELLO message from the WebSocket connection, start setting up the call
     fn handle_hello(&self) -> Result<Option<OwnedMessage>, Error> {
-        if let Some(ref peer_id) = self.0.peer_id {
+        if let Some(ref peer_id) = self.0.args.peer_id {
             self.setup_call(peer_id).map(Some)
         } else {
             // Wait for a peer to appear
@@ -711,7 +718,7 @@ impl App {
     }
 }
 
-fn parse_args() -> (String, Option<String>, bool) {
+fn parse_args() -> Args {
     let matches = clap::App::new("Sendrecv rust")
         .arg(
             clap::Arg::with_name("peer-id")
@@ -743,7 +750,11 @@ fn parse_args() -> (String, Option<String>, bool) {
 
     let rtx = matches.is_present("rtx");
 
-    (server.to_string(), peer_id.map(String::from), rtx)
+    Args {
+        server: server.to_string(),
+        peer_id: peer_id.map(String::from),
+        rtx,
+    }
 }
 
 fn check_plugins() -> Result<(), Error> {
@@ -773,8 +784,8 @@ fn check_plugins() -> Result<(), Error> {
     }
 }
 
-async fn run(server: String, peer_id: Option<String>, rtx: bool) -> Result<(), Error> {
-    let (ws_r, ws_w) = websocket_hyper::client::connect(&server).await?;
+async fn run(args: Args) -> Result<(), Error> {
+    let (ws_r, ws_w) = websocket_hyper::client::connect(args.server.clone()).await?;
     println!("connected");
 
     // Create basic pipeline
@@ -798,11 +809,10 @@ async fn run(server: String, peer_id: Option<String>, rtx: bool) -> Result<(), E
     // Create our application control logic
     let (send_ws_msg_tx, send_ws_msg_rx) = mpsc::unbounded_channel::<OwnedMessage>();
     let app = App(Arc::new(AppInner {
-        peer_id,
+        args,
         pipeline,
         webrtcbin,
         send_msg_tx: Mutex::new(send_ws_msg_tx),
-        rtx,
     }));
 
     // Start registration process with the server. This will insert a
@@ -852,13 +862,13 @@ fn main() {
         return;
     }
 
-    let (server, peer_id, rtx) = parse_args();
+    let args = parse_args();
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
-    println!("Connecting to server {}", server);
+    println!("Connecting to server {}", args.server);
 
-    if let Err(err) = runtime.block_on(run(server, peer_id, rtx)) {
+    if let Err(err) = runtime.block_on(run(args)) {
         println!("Error: {:?}", err);
     }
 
