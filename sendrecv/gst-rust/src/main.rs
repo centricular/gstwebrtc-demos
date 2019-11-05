@@ -9,7 +9,9 @@ use serde_derive::{Deserialize, Serialize};
 
 use tokio::prelude::*;
 use tokio::sync::mpsc;
-use websocket_hyper::OwnedMessage;
+
+use tungstenite::Error as WsError;
+use tungstenite::Message as WsMessage;
 
 use gst::gst_element_error;
 use gst::prelude::*;
@@ -83,13 +85,13 @@ struct AppInner {
     args: Args,
     pipeline: gst::Pipeline,
     webrtcbin: gst::Element,
-    send_msg_tx: Mutex<mpsc::UnboundedSender<OwnedMessage>>,
+    send_msg_tx: Mutex<mpsc::UnboundedSender<WsMessage>>,
 }
 
 // Various error types for the different errors that can happen here
 #[derive(Debug, Fail)]
 #[fail(display = "WebSocket error: {:?}", _0)]
-struct WebSocketError(websocket_hyper::WebSocketError);
+struct WebSocketError(WsError);
 
 #[derive(Debug, Fail)]
 #[fail(display = "GStreamer error: {:?}", _0)]
@@ -151,11 +153,12 @@ impl App {
             .send_msg_tx
             .lock()
             .unwrap()
-            .try_send(OwnedMessage::Text(msg))
+            .try_send(WsMessage::Text(msg))
             .map_err(|_| {
-                WebSocketError(websocket_hyper::WebSocketError::IoError(
-                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Connection Closed"),
-                ))
+                WebSocketError(WsError::Io(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "Connection Closed",
+                )))
                 .into()
             })
     }
@@ -521,13 +524,13 @@ impl App {
     }
 
     // Send ID of the peer we want to talk to via the WebSocket connection
-    fn setup_call(&self, peer_id: &str) -> Result<OwnedMessage, Error> {
+    fn setup_call(&self, peer_id: &str) -> Result<WsMessage, Error> {
         println!("Setting up signalling server call with {}", peer_id);
-        Ok(OwnedMessage::Text(format!("SESSION {}", peer_id)))
+        Ok(WsMessage::Text(format!("SESSION {}", peer_id)))
     }
 
     // Once we got the HELLO message from the WebSocket connection, start setting up the call
-    fn handle_hello(&self) -> Result<Option<OwnedMessage>, Error> {
+    fn handle_hello(&self) -> Result<Option<WsMessage>, Error> {
         if let Some(ref peer_id) = self.0.args.peer_id {
             self.setup_call(peer_id).map(Some)
         } else {
@@ -537,7 +540,7 @@ impl App {
     }
 
     // Once the session is set up correctly we start our pipeline
-    fn handle_session_ok(&self) -> Result<Option<OwnedMessage>, Error> {
+    fn handle_session_ok(&self) -> Result<Option<WsMessage>, Error> {
         self.setup_pipeline()?;
 
         // And finally asynchronously start our pipeline
@@ -554,14 +557,14 @@ impl App {
     }
 
     // Handle errors from the peer send to us via the WebSocket connection
-    fn handle_error(&self, msg: &str) -> Result<Option<OwnedMessage>, Error> {
+    fn handle_error(&self, msg: &str) -> Result<Option<WsMessage>, Error> {
         println!("Got error message! {}", msg);
 
         Err(PeerError(msg.into()).into())
     }
 
     // Handle incoming SDP answers from the peer
-    fn handle_sdp(&self, type_: &str, sdp: &str) -> Result<Option<OwnedMessage>, Error> {
+    fn handle_sdp(&self, type_: &str, sdp: &str) -> Result<Option<WsMessage>, Error> {
         if type_ == "answer" {
             print!("Received answer:\n{}\n", sdp);
 
@@ -637,7 +640,7 @@ impl App {
         &self,
         sdp_mline_index: u32,
         candidate: &str,
-    ) -> Result<Option<OwnedMessage>, Error> {
+    ) -> Result<Option<WsMessage>, Error> {
         self.0
             .webrtcbin
             .emit("add-ice-candidate", &[&sdp_mline_index, &candidate])
@@ -647,7 +650,7 @@ impl App {
     }
 
     // Handle messages we got from the peer via the WebSocket connection
-    fn on_message(&self, msg: &str) -> Result<Option<OwnedMessage>, Error> {
+    fn on_message(&self, msg: &str) -> Result<Option<WsMessage>, Error> {
         match msg {
             "HELLO" => self.handle_hello(),
 
@@ -670,26 +673,20 @@ impl App {
     }
 
     // Handle WebSocket messages, both our own as well as WebSocket protocol messages
-    fn handle_websocket_message(
-        &self,
-        message: OwnedMessage,
-    ) -> Result<Option<OwnedMessage>, Error> {
+    fn handle_websocket_message(&self, message: WsMessage) -> Result<Option<WsMessage>, Error> {
         match message {
-            OwnedMessage::Close(_) => Ok(Some(OwnedMessage::Close(None))),
+            WsMessage::Close(_) => Ok(Some(WsMessage::Close(None))),
 
-            OwnedMessage::Ping(data) => Ok(Some(OwnedMessage::Pong(data))),
+            WsMessage::Ping(data) => Ok(Some(WsMessage::Pong(data))),
 
-            OwnedMessage::Text(msg) => self.on_message(&msg),
-            OwnedMessage::Binary(_) => Ok(None),
-            OwnedMessage::Pong(_) => Ok(None),
+            WsMessage::Text(msg) => self.on_message(&msg),
+            WsMessage::Binary(_) => Ok(None),
+            WsMessage::Pong(_) => Ok(None),
         }
     }
 
     // Handle GStreamer messages coming from the pipeline
-    fn handle_pipeline_message(
-        &self,
-        message: &gst::Message,
-    ) -> Result<Option<OwnedMessage>, Error> {
+    fn handle_pipeline_message(&self, message: &gst::Message) -> Result<Option<WsMessage>, Error> {
         use gst::message::MessageView;
 
         match message.view() {
@@ -785,7 +782,9 @@ fn check_plugins() -> Result<(), Error> {
 }
 
 async fn run(args: Args) -> Result<(), Error> {
-    let (ws_r, ws_w) = websocket_hyper::client::connect(args.server.clone()).await?;
+    let url = url::Url::parse(&args.server)?;
+    let (ws, _) = tokio_tungstenite::connect_async(url).await?;
+    let (ws_w, ws_r) = ws.split();
     println!("connected");
 
     // Create basic pipeline
@@ -807,7 +806,7 @@ async fn run(args: Args) -> Result<(), Error> {
     });
 
     // Create our application control logic
-    let (send_ws_msg_tx, send_ws_msg_rx) = mpsc::unbounded_channel::<OwnedMessage>();
+    let (send_ws_msg_tx, send_ws_msg_rx) = mpsc::unbounded_channel::<WsMessage>();
     let app = App(Arc::new(AppInner {
         args,
         pipeline,
