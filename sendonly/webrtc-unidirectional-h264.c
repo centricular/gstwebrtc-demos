@@ -1,3 +1,13 @@
+/**
+ @file
+ @brief Local only gst webrtc demo.
+
+ Interfaces: v4l2src, web user
+ Uses local web server and local session, sdp, ice.
+ Doesn't use signalling server, rooms, audio.
+
+ */
+
 #include <locale.h>
 #include <glib.h>
 #include <glib-unix.h>

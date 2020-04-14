@@ -1,4 +1,11 @@
-/*
+/**
+ * @file
+ * @brief gst webrtc demo. Session only.
+ *
+ * Doesn't supports rooms.
+ *
+ * Interfaces: signalling, videotestsrc, audiotestsrc, webrtcbin
+ *
  * Demo gstreamer app for negotiating and streaming a sendrecv webrtc stream
  * with a browser JS app.
  *

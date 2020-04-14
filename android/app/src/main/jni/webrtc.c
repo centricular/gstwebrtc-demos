@@ -1,3 +1,11 @@
+/**
+ @file
+ @brief JNI gst webrtc demo. Session only.
+
+ Doesn't supports rooms.
+
+ Interfaces: JNI, signalling, ahcsrc - android hardware camera, openslessrc
+ */
 /* GStreamer
  *
  * Copyright (C) 2014 Sebastian Dröge <sebastian@centricular.com>

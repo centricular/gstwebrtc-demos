@@ -1,6 +1,13 @@
-/*
+/**
+ * @file
+ * @brief Audio multiparty rooms gst webrtc demo.
+ *
+ * Doesn't supports sessions, video.
+ *
  * Demo gstreamer app for negotiating and streaming a sendrecv audio-only webrtc
  * stream to all the peers in a multiparty room.
+ *
+ * Interfaces: audiotestsrc, autoaudiosink, webrtcbin, signalling
  *
  * gcc mp-webrtc-sendrecv.c $(pkg-config --cflags --libs gstreamer-webrtc-1.0 gstreamer-sdp-1.0 libsoup-2.4 json-glib-1.0) -o mp-webrtc-sendrecv
  *
