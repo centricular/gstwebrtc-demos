@@ -123,7 +123,7 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
   sink = gst_element_factory_make (sink_name, NULL);
   g_assert_nonnull (sink);
 
-  if (g_strcmp0 (convert_name, "audioconvert") == 0) {
+  if (g_str_equal (convert_name, "audioconvert")) {
     /* Might also need to resample, so add it just in case.
      * Will be a no-op if it's not required. */
     resample = gst_element_factory_make ("audioresample", NULL);
@@ -803,8 +803,8 @@ main (int argc, char *argv[])
    * it's probably a test server with a self-signed certificate */
   {
     GstUri *uri = gst_uri_from_string (server_url);
-    if (g_strcmp0 ("localhost", gst_uri_get_host (uri)) == 0 ||
-        g_strcmp0 ("127.0.0.1", gst_uri_get_host (uri)) == 0)
+    if (g_str_equal ("localhost", gst_uri_get_host (uri)) ||
+        g_str_equal ("127.0.0.1", gst_uri_get_host (uri)))
       disable_ssl = TRUE;
     gst_uri_unref (uri);
   }

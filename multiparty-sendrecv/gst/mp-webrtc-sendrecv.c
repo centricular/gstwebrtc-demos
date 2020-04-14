@@ -723,11 +723,11 @@ handle_peer_message (const gchar * peer_id, const gchar * msg)
     sdp_type = json_object_get_string_member (child, "type");
     text = json_object_get_string_member (child, "sdp");
 
-    if (g_strcmp0 (sdp_type, "offer") == 0) {
+    if (g_str_equal (sdp_type, "offer")) {
       app_state = ROOM_CALL_ANSWERING;
       incoming_call_from_peer (peer_id);
       handle_sdp_offer (peer_id, text);
-    } else if (g_strcmp0 (sdp_type, "answer") == 0) {
+    } else if (g_str_equal (sdp_type, "answer")) {
       g_assert_cmpint (app_state, >=, ROOM_CALL_OFFERING);
       handle_sdp_answer (peer_id, text);
       app_state = ROOM_CALL_STARTED;
@@ -780,7 +780,7 @@ on_server_message (SoupWebsocketConnection * conn, SoupWebsocketDataType type,
   }
 
   /* Server has accepted our registration, we are ready to send commands */
-  if (g_strcmp0 (text, "HELLO") == 0) {
+  if (g_str_equal (text, "HELLO")) {
     /* May fail asynchronously */
     do_registration ();
     /* Room-related message */
@@ -959,8 +959,8 @@ main (int argc, char *argv[])
    * it's probably a test server with a self-signed certificate */
   {
     GstUri *uri = gst_uri_from_string (server_url);
-    if (g_strcmp0 ("localhost", gst_uri_get_host (uri)) == 0 ||
-        g_strcmp0 ("127.0.0.1", gst_uri_get_host (uri)) == 0)
+    if (g_str_equal ("localhost", gst_uri_get_host (uri)) ||
+        g_str_equal ("127.0.0.1", gst_uri_get_host (uri)))
       strict_ssl = FALSE;
     gst_uri_unref (uri);
   }

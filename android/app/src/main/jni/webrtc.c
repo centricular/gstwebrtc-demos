@@ -148,7 +148,7 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char * convert_name,
   g_assert (conv);
   sink = gst_element_factory_make (sink_name, NULL);
   g_assert (sink);
-  if (g_strcmp0 (convert_name, "audioconvert") == 0) {
+  if (g_str_equal (convert_name, "audioconvert")) {
     GstElement *resample = gst_element_factory_make ("audioresample", NULL);
     g_assert_nonnull (resample);
     gst_bin_add_many (GST_BIN (pipe), q, conv, resample, sink, NULL);
@@ -457,7 +457,7 @@ on_server_message (SoupWebsocketConnection * conn, SoupWebsocketDataType type,
   }
 
   /* Server has accepted our registration, we are ready to send commands */
-  if (g_strcmp0 (text, "HELLO") == 0) {
+  if (g_str_equal (text, "HELLO")) {
     if (webrtc->app_state != SERVER_REGISTERING) {
       cleanup_and_quit_loop (webrtc, "ERROR: Received HELLO when not registering",
                              APP_STATE_ERROR);
@@ -471,7 +471,7 @@ on_server_message (SoupWebsocketConnection * conn, SoupWebsocketDataType type,
       goto out;
     }
     /* Call has been setup by the server, now we can start negotiation */
-  } else if (g_strcmp0 (text, "SESSION_OK") == 0) {
+  } else if (g_str_equal (text, "SESSION_OK")) {
     if (webrtc->app_state != PEER_CONNECTING) {
       cleanup_and_quit_loop (webrtc, "ERROR: Received SESSION_OK when not calling",
                              PEER_CONNECTION_ERROR);

@@ -383,7 +383,7 @@ soup_websocket_message_cb (G_GNUC_UNUSED SoupWebsocketConnection * connection,
   }
   data_json_object = json_object_get_object_member (root_json_object, "data");
 
-  if (g_strcmp0 (type_string, "sdp") == 0) {
+  if (g_str_equal (type_string, "sdp")) {
     const gchar *sdp_type_string;
     const gchar *sdp_string;
     GstPromise *promise;
@@ -397,7 +397,7 @@ soup_websocket_message_cb (G_GNUC_UNUSED SoupWebsocketConnection * connection,
     }
     sdp_type_string = json_object_get_string_member (data_json_object, "type");
 
-    if (g_strcmp0 (sdp_type_string, "answer") != 0) {
+    if (!g_str_equal (sdp_type_string, "answer")) {
       g_error ("Expected SDP message type \"answer\", got \"%s\"\n",
           sdp_type_string);
       goto cleanup;
@@ -432,7 +432,7 @@ soup_websocket_message_cb (G_GNUC_UNUSED SoupWebsocketConnection * connection,
     gst_promise_interrupt (promise);
     gst_promise_unref (promise);
     gst_webrtc_session_description_free (answer);
-  } else if (g_strcmp0 (type_string, "ice") == 0) {
+  } else if (g_str_equal (type_string, "ice")) {
     guint mline_index;
     const gchar *candidate_string;
 
@@ -488,7 +488,7 @@ soup_http_handler (G_GNUC_UNUSED SoupServer * soup_server,
 {
   SoupBuffer *soup_buffer;
 
-  if ((g_strcmp0 (path, "/") != 0) && (g_strcmp0 (path, "/index.html") != 0)) {
+  if (!g_str_equal (path, "/") && !g_str_equal (path, "/index.html")) {
     soup_message_set_status (message, SOUP_STATUS_NOT_FOUND);
     return;
   }
