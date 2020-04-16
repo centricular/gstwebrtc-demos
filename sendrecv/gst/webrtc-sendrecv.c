@@ -267,10 +267,7 @@ on_offer_created (GstPromise * promise, gpointer user_data)
       GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, NULL);
   gst_promise_unref (promise);
 
-  promise = gst_promise_new ();
-  g_signal_emit_by_name (webrtc1, "set-local-description", offer, promise);
-  gst_promise_interrupt (promise);
-  gst_promise_unref (promise);
+  g_signal_emit_by_name (webrtc1, "set-local-description", offer, NULL);
 
   /* Send offer to peer */
   send_sdp_to_peer (offer);
@@ -497,10 +494,7 @@ on_answer_created (GstPromise * promise, gpointer user_data)
       GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
   gst_promise_unref (promise);
 
-  promise = gst_promise_new ();
-  g_signal_emit_by_name (webrtc1, "set-local-description", answer, promise);
-  gst_promise_interrupt (promise);
-  gst_promise_unref (promise);
+  g_signal_emit_by_name (webrtc1, "set-local-description", answer, NULL);
 
   /* Send answer to peer */
   send_sdp_to_peer (answer);
@@ -517,12 +511,7 @@ on_offer_received (GstSDPMessage * sdp)
   g_assert_nonnull (offer);
 
   /* Set remote description on our pipeline */
-  {
-    promise = gst_promise_new ();
-    g_signal_emit_by_name (webrtc1, "set-remote-description", offer, promise);
-    gst_promise_interrupt (promise);
-    gst_promise_unref (promise);
-  }
+  g_signal_emit_by_name (webrtc1, "set-remote-description", offer, NULL);
   gst_webrtc_session_description_free (offer);
 
   promise = gst_promise_new_with_change_func (on_answer_created, NULL, NULL);
