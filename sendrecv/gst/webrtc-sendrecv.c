@@ -259,13 +259,11 @@ static void
 on_offer_created (GstPromise * promise, gpointer user_data)
 {
   GstWebRTCSessionDescription *offer = NULL;
-  const GstStructure *reply;
 
   g_assert_cmphex (app_state, ==, PEER_CALL_NEGOTIATING);
 
   g_assert_cmphex (gst_promise_wait (promise), ==, GST_PROMISE_RESULT_REPLIED);
-  reply = gst_promise_get_reply (promise);
-  gst_structure_get (reply, "offer",
+  gst_structure_get (gst_promise_get_reply (promise), "offer",
       GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, NULL);
   gst_promise_unref (promise);
 
@@ -284,16 +282,11 @@ on_negotiation_needed (GstElement * element, gpointer user_data)
 {
   app_state = PEER_CALL_NEGOTIATING;
 
-  if (remote_is_offerer) {
-    gchar *msg = g_strdup_printf ("OFFER_REQUEST");
-    soup_websocket_connection_send_text (ws_conn, msg);
-    g_free (msg);
-  } else {
-    GstPromise *promise;
-    promise =
-        gst_promise_new_with_change_func (on_offer_created, user_data, NULL);;
-    g_signal_emit_by_name (webrtc1, "create-offer", NULL, promise);
-  }
+  if (remote_is_offerer)
+    soup_websocket_connection_send_text (ws_conn, "OFFER_REQUEST");
+  else
+    g_signal_emit_by_name (webrtc1, "create-offer", NULL,
+        gst_promise_new_with_change_func (on_offer_created, user_data, NULL));
 }
 
 #define STUN_SERVER " stun-server=stun://stun.l.google.com:19302 "
@@ -496,13 +489,11 @@ static void
 on_answer_created (GstPromise * promise, gpointer user_data)
 {
   GstWebRTCSessionDescription *answer = NULL;
-  const GstStructure *reply;
 
   g_assert_cmphex (app_state, ==, PEER_CALL_NEGOTIATING);
 
   g_assert_cmphex (gst_promise_wait (promise), ==, GST_PROMISE_RESULT_REPLIED);
-  reply = gst_promise_get_reply (promise);
-  gst_structure_get (reply, "answer",
+  gst_structure_get (gst_promise_get_reply (promise), "answer",
       GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
   gst_promise_unref (promise);
 
