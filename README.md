@@ -1,3 +1,13 @@
+# Moved - June 2020
+
+This repository has been moved and integrated with upstream's gst-examples
+repository available from
+https://gitlab.freedesktop.org/gstreamer/gst-examples/.
+
+As a general warning, most of the the following README contents are now very
+much outdated with respect to upstream GStreamer.  An updated README is
+available from https://gitlab.freedesktop.org/gstreamer/gst-examples/-/blob/master/webrtc/README.md.
+
 # GStreamer WebRTC demos
 
 All demos use the same signalling server in the `signalling/` directory
