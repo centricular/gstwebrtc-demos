@@ -137,7 +137,7 @@ impl App {
 
         // Create a stream for handling the GStreamer message asynchronously
         let bus = pipeline.get_bus().unwrap();
-        let send_gst_msg_rx = gst::BusStream::new(&bus);
+        let send_gst_msg_rx = bus.stream();
 
         // Channel for outgoing WebSocket messages from other threads
         let (send_ws_msg_tx, send_ws_msg_rx) = mpsc::unbounded::<WsMessage>();
@@ -277,15 +277,24 @@ impl App {
         println!("starting negotiation");
 
         let app_clone = self.downgrade();
-        let promise = gst::Promise::new_with_change_func(move |reply| {
+        let promise = gst::Promise::with_change_func(move |reply| {
             let app = upgrade_weak!(app_clone);
 
-            if let Err(err) = app.on_offer_created(reply) {
-                gst_element_error!(
-                    app.pipeline,
-                    gst::LibraryError::Failed,
-                    ("Failed to send SDP offer: {:?}", err)
-                );
+            match reply.transpose() {
+                Some(reply) => if let Err(err) = app.on_offer_created(reply) {
+                    gst_element_error!(
+                        app.pipeline,
+                        gst::LibraryError::Failed,
+                        ("Failed to send SDP offer: {:?}", err)
+                    );
+                }
+                None => {
+                    gst_element_error!(
+                        app.pipeline,
+                        gst::LibraryError::Failed,
+                        ("No reply in create-offer")
+                    );
+                }
             }
         });
 
@@ -420,15 +429,24 @@ impl App {
                     .unwrap();
 
                 let app_clone = app.downgrade();
-                let promise = gst::Promise::new_with_change_func(move |reply| {
+                let promise = gst::Promise::with_change_func(move |reply| {
                     let app = upgrade_weak!(app_clone);
 
-                    if let Err(err) = app.on_answer_created(reply) {
-                        gst_element_error!(
-                            app.pipeline,
-                            gst::LibraryError::Failed,
-                            ("Failed to send SDP answer: {:?}", err)
-                        );
+                    match reply.transpose() {
+                        Some(reply) => if let Err(err) = app.on_answer_created(reply) {
+                            gst_element_error!(
+                                app.pipeline,
+                                gst::LibraryError::Failed,
+                                ("Failed to send SDP answer: {:?}", err)
+                            );
+                        }
+                        None => {
+                            gst_element_error!(
+                                app.pipeline,
+                                gst::LibraryError::Failed,
+                                ("No reply in create-answer")
+                            );
+                        }
                     }
                 });
 
